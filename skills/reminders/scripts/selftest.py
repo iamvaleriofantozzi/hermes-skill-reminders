@@ -378,6 +378,32 @@ def test_delivery():
     RESULTS.append((g, "secondo tick non ripete", r.stdout.strip() == "", r.stdout[:80]))
     t(g, "tick marca sent_at", ["show", CTX["id"]["Con early"]], want="sent")
 
+    # ── Un promemoria SENZA elenco deve essere consegnato ──────────────────
+    # Con list_id NULL una INNER JOIN su lists lo faceva sparire del tutto:
+    # nessuna notifica, mai, in silenzio.
+    add("Senza elenco in consegna", "--due", "2020-01-01 10:00", group=g)
+    i = CTX["id"]["Senza elenco in consegna"]
+    c = sqlite3.connect(DB)
+    c.execute("UPDATE reminders SET list_id=NULL WHERE id=?", (i,))
+    c.commit()
+    c.close()
+    out = subprocess.run([sys.executable, "tick.py", "--dry-run"], cwd=SCRIPTS,
+                         capture_output=True, text=True).stdout
+    RESULTS.append((g, "promemoria senza elenco consegnato",
+                    "Senza elenco in consegna" in out, out[:120]))
+
+    # ── Recupero dopo un'assenza ───────────────────────────────────────────
+    # Un avviso "in anticipo" la cui scadenza è già passata non è un
+    # promemoria, è rumore; e lo stesso promemoria non deve comparire due volte.
+    add("Recupero", "--due", "2026-09-15 09:00", "--early", "1h", group=g)
+    r = CTX["id"]["Recupero"]
+    out = subprocess.run([sys.executable, "tick.py", "--dry-run"], cwd=SCRIPTS,
+                         capture_output=True, text=True).stdout
+    rec = [l for l in out.splitlines() if "Recupero" in l]
+    RESULTS.append((g, "recupero: una sola riga per promemoria", len(rec) == 1, str(rec)))
+    RESULTS.append((g, "recupero: avviso 'in anticipo' tardivo soppresso",
+                    not any("upcoming" in l for l in rec), str(rec)))
+
 
 # ─── O. i18n ─────────────────────────────────────────────────────────────────
 def test_i18n():

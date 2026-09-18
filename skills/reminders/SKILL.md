@@ -281,6 +281,32 @@ haven't sized — and counted separately in the totals line.
 
 To stop the nagging: complete the reminder, or `settings set nag_max 0`.
 
+## If the agent isn't running when something is due
+
+Nothing is lost, but nothing fires on time either.
+
+- **While Hermes is down** (or the machine is asleep) no tick runs: `tick.py` is
+  launched by a cron job *inside* Hermes.
+- **When it comes back**, the scheduler treats the missed dispatch as `catch_up`
+  (beyond the ~2-minute grace for a 1-minute job) and runs the job **once**;
+  accumulated misses are not replayed individually. Nothing to do with
+  `cron.catch_up_missed` disabled: then the missed slot is skipped, and delivery
+  resumes at the next tick.
+- **`tick.py` then catches up on its own**: it selects every alarm with
+  `fire_at <= now` and `sent_at IS NULL`, with no time window, so everything
+  queued during the downtime goes out in one message, late, marked `OVERDUE`.
+
+Two rules keep that message readable:
+
+- An `early` warning whose due time has already passed is **dropped** — warning
+  you before something that already happened is noise, not a reminder. It is
+  marked sent so it does not sit in the queue forever.
+- **One line per reminder**, even when several of its alarms are due at once.
+
+So a reminder due at 09:00 while the agent was off arrives when the agent
+restarts, saying `OVERDUE` — not three times, and without a meaningless
+"upcoming" line for an event already gone.
+
 ## Localisation
 
 ```bash

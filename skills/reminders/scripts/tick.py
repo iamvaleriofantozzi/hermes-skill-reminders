@@ -23,27 +23,55 @@ import rs  # noqa: E402
 
 
 def gather(conn, ref):
-    """Allarmi da sparare adesso + promemoria da sollecitare."""
+    """Allarmi da sparare adesso + promemoria da sollecitare.
+
+    LEFT JOIN su `lists`: un promemoria puo' non avere elenco (list_id NULL) e
+    sparirebbe del tutto dalla consegna. `COALESCE(l.muted,0)` perche' con il
+    LEFT JOIN il muted di un promemoria senza elenco e' NULL, e NULL = 0 non e'
+    mai vero: anche quel confronto lo escluderebbe.
+
+    Gli allarmi `early` con scadenza gia' passata sono esclusi: se Hermes e'
+    rimasto spento, avvisare in anticipo di qualcosa che e' gia' successo non e'
+    un promemoria, e' rumore.
+    """
     fired = conn.execute(
-        """SELECT a.id AS alarm_id, a.kind, a.label, a.fire_at, r.*, l.name AS list_name, l.muted
+        """SELECT a.id AS alarm_id, a.kind, a.label, a.fire_at, r.*, l.name AS list_name,
+                  COALESCE(l.muted, 0) AS muted
            FROM alarms a
            JOIN reminders r ON r.id = a.reminder_id
-           JOIN lists l ON l.id = r.list_id
+           LEFT JOIN lists l ON l.id = r.list_id
            WHERE a.sent_at IS NULL AND a.fire_at <= ?
-             AND r.completed_at IS NULL AND l.muted = 0
-           ORDER BY a.fire_at""", (rs.iso(ref),)).fetchall()
+             AND r.completed_at IS NULL AND COALESCE(l.muted, 0) = 0
+             AND NOT (a.kind = 'early' AND r.due_at IS NOT NULL AND r.due_at <= ?)
+           ORDER BY a.fire_at""", (rs.iso(ref), rs.iso(ref))).fetchall()
     nags = conn.execute(
-        """SELECT r.*, l.name AS list_name, l.muted
-           FROM reminders r JOIN lists l ON l.id = r.list_id
-           WHERE r.completed_at IS NULL AND l.muted = 0
+        """SELECT r.*, l.name AS list_name, COALESCE(l.muted, 0) AS muted
+           FROM reminders r LEFT JOIN lists l ON l.id = r.list_id
+           WHERE r.completed_at IS NULL AND COALESCE(l.muted, 0) = 0
              AND r.nag_at IS NOT NULL AND r.nag_at <= ?
            ORDER BY r.due_at""", (rs.iso(ref),)).fetchall()
     return fired, nags
 
 
+def drop_stale_early(conn, ref) -> int:
+    """Segna come inviati gli avvisi `early` ormai superati, cosi' non restano in coda per sempre."""
+    cur = conn.execute(
+        """UPDATE alarms SET sent_at=?
+           WHERE sent_at IS NULL AND kind='early' AND fire_at <= ?
+             AND reminder_id IN (SELECT id FROM reminders
+                                 WHERE due_at IS NOT NULL AND due_at <= ?)""",
+        (rs.iso(ref), rs.iso(ref), rs.iso(ref)))
+    return cur.rowcount or 0
+
+
 def render(conn, fired, nags, ref):
+    """Una riga per promemoria: piu' allarmi dello stesso non devono ripeterlo."""
     lines = []
+    seen = set()
     for a in fired:
+        if a["id"] in seen:
+            continue
+        seen.add(a["id"])
         label = {"early": rs.tl(conn, "tick_early"), "due": rs.tl(conn, "tick_due"),
                  "custom": a["label"] or rs.tl(conn, "tick_custom")}.get(
                      a["kind"], rs.tl(conn, "tick_custom"))
@@ -55,6 +83,9 @@ def render(conn, fired, nags, ref):
             line += f"\n    {a['url']}"
         lines.append(line)
     for r in nags:
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
         line = f"{rs.tl(conn, 'tick_nag')}: {rs.human(conn, r, ref)}"
         if r["notes"]:
             line += f"\n    {r['notes']}"
@@ -74,14 +105,19 @@ def main() -> int:
     dry = "--dry-run" in sys.argv
     conn = rs.connect()
     ref = rs.now()
+    # Gli avvisi in anticipo ormai superati vanno archiviati anche quando non
+    # c'e' altro da consegnare, altrimenti restano in coda per sempre.
+    stale = 0 if dry else drop_stale_early(conn, ref)
     fired, nags = gather(conn, ref)
 
     if not fired and not nags:
+        if stale:
+            conn.commit()
         conn.close()
         return 0
 
     lines = render(conn, fired, nags, ref)
-    header = rs.tl(conn, "tick_title", n=len(fired) + len(nags))
+    header = rs.tl(conn, "tick_title", n=len(lines))
 
     if dry:
         print("[dry-run] " + header)

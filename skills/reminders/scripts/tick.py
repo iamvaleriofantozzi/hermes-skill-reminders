@@ -48,8 +48,7 @@ def render(conn, fired, nags, ref):
                  "custom": a["label"] or rs.tl(conn, "tick_custom")}.get(
                      a["kind"], rs.tl(conn, "tick_custom"))
         head = f"{label}: " if label else ""
-        mark = "!!" if a["urgent"] else "·"
-        line = f"{mark} {head}{rs.human(conn, a, ref)}"
+        line = f"{head}{rs.human(conn, a, ref)}"
         if a["notes"]:
             line += f"\n    {a['notes']}"
         if a["url"]:

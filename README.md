@@ -1,117 +1,224 @@
-# Reminders — an Apple Reminders replica for Hermes Agent
+# ⏰ Reminders
 
-A **self-contained reminder system** that lives inside your Hermes profile. It does
-not touch Apple's Reminders app: it keeps its own SQLite database and delivers
-notifications to your chat through a cron job.
+### An Apple Reminders replica for Hermes Agent
 
-## Why
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
+[![Platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#-requirements)
+[![For Hermes Agent](https://img.shields.io/badge/for-Hermes%20Agent-8A2BE2.svg)](https://github.com/NousResearch/hermes-agent)
+![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
 
-Agents are good at *doing*, not at *remembering at the right time*. An in-session
-todo list dies with the session, and system monitors are agent alerts, not your
-reminders. This skill fills that gap: real reminders with due dates, advance
-warnings, recurrences and nagging — delivered on their own, even when nobody is
-talking to the agent.
+> Agents are brilliant at *doing*. They're terrible at *remembering at the right moment*.
+>
+> This fixes that. 🔔
 
-## Features
+A self-contained reminder system that lives inside your Hermes profile — lists,
+due dates, early warnings, recurrences and gentle (then not-so-gentle) nagging,
+delivered straight to your chat even when nobody is talking to the agent.
 
-**Structure**
-- **No lists are created for you**: as in Apple Reminders, the built-in views
+No API keys. No external services. No LLM calls on the notification path.
+Just a SQLite file and a cron job that minds its own business. 🧘
+
+---
+
+## 🤔 Why this exists
+
+Every agent has the same two tools, and neither one actually reminds you:
+
+| | |
+|---|---|
+| 📝 **In-session todo list** | Dies the moment the session ends. Great for "where was I?" — useless for "don't forget Thursday". |
+| 🔍 **System monitors** | Built for the agent's own alerts ("the site changed"), not for *your* life. |
+
+So here's the missing third thing: **reminders that survive the conversation**.
+Set them and walk away. Your chat pings you when it matters. 💬
+
+---
+
+## ✨ What you get
+
+### 🗂️ Structure
+- **Lists** with colour, icon, folder, pinned, muted, and a default
+- **No lists are forced on you** — as in Apple Reminders, the built-in views
   (Today, Scheduled, All, Flagged, Urgent, Anytime, Completed) are *computed*,
-  not lists. You create your own lists, and a reminder may have **no list at all**
-- Lists with colour, icon, folder, pinned, muted, default
-- Sections inside a list, plus a kanban **column view** grouped by section
-- Grocery lists with automatic category grouping
-- **Smart lists**: saved views filtered by tags, flag, urgent, priority, list,
-  due-within-N-days, has/no date — combined with AND or ANY
-- **Templates**: save a reminder as a template, apply it with a new date
+  not lists. Create yours, or don't. A reminder can even have **no list at all** 👌
+- **Sections** inside a list, plus a kanban **column view** grouped by section
+- 🛒 **Grocery lists** with automatic category grouping
+- 💾 **Templates** — save a reminder as a template, stamp it out with a new date
+- 🎯 **Smart lists** — saved views filtered by tag, flag, urgent, priority, list,
+  due-within-N-days, has/no date… combined with ALL or ANY
 
-**The reminder itself**
-- Notes, URL, attachment reference, tags, priority (none/low/medium/high), flag
-- **Urgent** — surfaced as `URGENT` in the notification
-- **Subtasks** — completing a parent completes its children
-- Location metadata (arriving / leaving)
+### 📌 The reminder itself
+- Notes, URL, attachment reference, tags, priority, flag
+- 🔥 **Urgent** — shows up as `URGENT` when it lands
+- 🪆 **Subtasks** — finish the parent, the children close themselves
+- 📍 Location metadata (arriving / leaving)
 
-**Timing**
-- Due with a time, or all-day (notifies at a configurable hour)
-- **Early reminder** — an advance warning (minutes to months before)
-- **Multiple alarms per reminder** — offsets or absolute times
-- **Recurrences**: hourly, daily, weekly (multi-day), monthly (fixed day of month
-  or patterns like *last Friday*), yearly (multi-month), with arbitrary intervals,
-  an end date, and *from completion* counting
-- **Nagging**: overdue items re-notify with a backoff until you complete them
+### ⏱️ Timing
+- Due with a time, or **all-day** (pings at an hour you choose)
+- ⏳ **Early reminder** — an advance nudge, from 5 minutes to a month before
+- 🔔 **Multiple alarms per reminder** — offsets (`3h`) or absolute times (`18:00`)
+- 🔁 **Recurrences** — hourly, daily, weekly (multi-day), monthly (fixed day *or*
+  patterns like *last Friday*), yearly (multi-month), with intervals, an end date,
+  and *count-from-completion* mode
+- 😤 **Nagging** — overdue items re-notify with a backoff until you actually close
+  them. Like Apple does. It will not let go. 💪
 
-**Views**: today · scheduled · all · flagged · urgent · anytime · overdue ·
-completed · week · nextweek · rolling 7 days. Weeks always start on Monday.
+### 👀 Views
+`today` · `scheduled` · `all` · `flagged` · `urgent` · `anytime` · `overdue` ·
+`completed` · `week` · `nextweek` · rolling `days7`
 
-**Localisation**: English (default) and Italian, switchable at runtime, including
-12/24-hour time, all-day notification time, and overdue rendering for all-day items.
+🗓️ **Weeks always start on Monday.** Not configurable — it's a fact, not a preference.
 
-## Install
+### 🌍 Languages
+English and Italian, switchable at runtime, including 12/24-hour time, the
+all-day notification hour, and how overdue all-day items are rendered.
+
+---
+
+## 🚀 Quick start
 
 ```bash
-# 1. copy the skill into your profile
+# 1️⃣  drop the skill into your profile
 mkdir -p ~/.hermes/profiles/<profile>/skills/productivity
 cp -R skills/reminders ~/.hermes/profiles/<profile>/skills/productivity/
 
-# 2. set it up (creates the database and the cron wrapper)
+# 2️⃣  set it up — creates the database and the cron wrapper
 python3 ~/.hermes/profiles/<profile>/skills/productivity/reminders/scripts/setup.py
 
-# 3. register the delivery job
+# 3️⃣  register the delivery job
 python3 .../scripts/setup.py --register --deliver telegram
-#    or, from a chat with the agent:
-#    cronjob_manage(action="create", schedule="1m", name="Reminders — delivery",
-#                    script="reminders_tick.sh", no_agent=True, deliver="origin")
+#     or just ask your agent:
+#     cronjob_manage(action="create", schedule="1m", name="Reminders — delivery",
+#                     script="reminders_tick.sh", no_agent=True, deliver="origin")
 
-# 4. verify
+# 4️⃣  make sure everything's wired up
 python3 .../scripts/setup.py --check
 ```
 
-No API keys, no external services, no LLM calls on the notification path:
-`no_agent` runs a script every minute and posts its stdout.
+`setup.py` figures out which profile holds the skill by itself. It's idempotent —
+run it twice, nothing breaks. 🙌
 
-## Requirements
+---
 
-- Python 3.10+
-- Hermes Agent with the cron scheduler running
-- On a **satellite profile** (one that does not own the platform credentials), a
-  target-exact `profile_route` carrying `chat_id` in `~/.hermes/config.yaml` is
-  required, otherwise delivery fails closed with
-  `platform '<name>' not configured/enabled`. See the Installation section of
-  `skills/reminders/SKILL.md`.
+## 💬 What it looks like
 
-## Usage
+```console
+$ rem.py add "Send the report" --list Work --due "tuesday 15:00" --early 2h --urgent
+#10  Send the report
+  list:       Work
+  status:     open
+  due:        22/09/2026 15:00  (timed)
+  early:      2h before
+  alarms:
+    · 22/09/2026 13:00  early
+    · 22/09/2026 15:00  due
+  priority:   none  [URGENT]
+
+$ rem.py week
+This week (Mon–Sun) (2)
+  · #9 Buy milk [today 18:30] OVERDUE  @Groceries
+  · #8 Call Marco [tomorrow 10:00]  @Work
+
+$ rem.py list Groceries
+Groceries — groceries (6)
+  Produce
+    · #1 apples
+    · #2 lemons
+  Dairy & eggs
+    · #9 Buy milk [today 18:30] OVERDUE
+    · #3 milk
+  Bread & grains
+    · #4 bread
+  Household & hygiene
+    · #5 dish soap
+```
+
+And in your chat, without anyone asking:
+
+```
+⏰ Reminders (2)
+upcoming: · #10 Send the report URGENT [tue 15:00]
+· #8 Call Marco [tomorrow 10:00]
+```
+
+---
+
+## 🧩 How it works
+
+```
+   you ──── "remind me to…" ────►  the agent
+                                     │  rem.py add …
+                                     ▼
+                              ┌──────────────┐
+                              │ reminders.db │  SQLite, one file, no server
+                              └──────┬───────┘
+                                     │  every minute
+                                     ▼
+    💬 your chat  ◄──────────  tick.py  ──►  fires due alarms, nags the
+                                              ones you keep ignoring 😅
+```
+
+`tick.py` runs through the scheduler with `no_agent`, which means **the whole
+notification path is a single Python script** — fast, free, and quiet when there's
+nothing to say. Empty output = no message sent. 🤫
+
+---
+
+## 🧰 Requirements
+
+- 🐍 Python 3.10+
+- 🤖 Hermes Agent with the cron scheduler running
+- 🛰️ On a **satellite profile** (one that doesn't own the platform credentials):
+  a target-exact `profile_route` carrying `chat_id` in `~/.hermes/config.yaml`,
+  otherwise delivery fails closed with `platform '<name>' not configured/enabled`.
+  Details in the [Installation section](skills/reminders/SKILL.md). 🧭
+
+---
+
+## 🛠️ Handy commands
 
 ```bash
 rem.py add "Call Marco" --list Work --due "tomorrow 9:00" --early 30m
 rem.py add "Report" --due 2026-10-01 --repeat monthly:last:fri --repeat-until 2027-12-31
 rem.py today | week | scheduled | urgent | overdue
 rem.py done 12 | snooze 12 +15m | edit 12 --due "friday 10:00"
-rem.py lists | lists add "Travel" --icon airplane | smart "Urgent" --urgent
+rem.py lists add "Travel" --icon airplane | smart "Urgent" --urgent
 rem.py alarms 12 add 1d --label "a day before"
-rem.py settings set language it
+rem.py settings set language it   # or back to en
 ```
 
-`--json` on every command for programmatic use. Full command reference, date
-formats, recurrence syntax and operating rules are in
-[`skills/reminders/SKILL.md`](skills/reminders/SKILL.md).
+Add `--json` to any command for programmatic use. The full reference — date
+formats, recurrence syntax, operating rules — is in
+**[`skills/reminders/SKILL.md`](skills/reminders/SKILL.md)** 📖
 
-## Not included
+---
 
-No UI, no sharing with other people, no sync with Apple Reminders or any external
-task app, and no real geofencing for location reminders (location is metadata).
-This is the agent's own reminder system.
+## 🚫 What it deliberately doesn't do
 
-## Author
+- No graphical UI — it's a CLI and a chat notification. That's the point. ✨
+- No sharing lists with other people
+- No sync with Apple Reminders or any third-party task app
+- No real geofencing for locations — the place is metadata, not a trigger
+
+This is the *agent's own* reminder system, standing on its own two feet. 🦶
+
+---
+
+## 👋 Author
 
 **Valerio Fantozzi** — built this because agents forget, and reminders shouldn't.
 
-- Email: <iamvaleriofantozzi@gmail.com>
-- LinkedIn: [valeriofantozzi](https://www.linkedin.com/in/valeriofantozzi/)
-- GitHub: [@iamvaleriofantozzi](https://github.com/iamvaleriofantozzi)
+- 📧 <iamvaleriofantozzi@gmail.com>
+- 💼 [linkedin.com/in/valeriofantozzi](https://www.linkedin.com/in/valeriofantozzi/)
+- 🐙 [@iamvaleriofantozzi](https://github.com/iamvaleriofantozzi)
 
-Questions, issues and pull requests are welcome. If this skill is useful to you,
-a star helps others find it.
+Found a bug? Have an idea? Open an issue — I'd genuinely like to hear it. 🗣️
+If this saved you from missing something important, **a star helps other people
+find it**. ⭐
 
-## License
+---
 
-MIT
+## 📄 License
+
+MIT — go wild. 🎉

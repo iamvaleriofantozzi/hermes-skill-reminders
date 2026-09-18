@@ -379,10 +379,10 @@ def cmd_list_view(conn, args):
                              ensure_ascii=False, indent=2))
             return
         print(L(conn, "groceries_title", name=r["name"], n=len(rows)))
-        for cat in rs.GROCERY_CATEGORIES:
-            if groups.get(cat):
-                print(f"  {cat}")
-                for x in groups[cat]:
+        for key in rs.GROCERY_CATEGORIES:
+            if groups.get(key):
+                print(f"  {rs.grocery_label(conn, key)}")
+                for x in groups[key]:
                     print("    " + rs.human(conn, x))
         return
     emit(conn, rows, r["name"], args)

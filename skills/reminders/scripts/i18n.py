@@ -79,6 +79,7 @@ EN = {
     "detail_subtasks": "subtasks",
     "flag_flagged": "flagged",
     "flag_urgent": "URGENT",
+    "flag_overdue": "OVERDUE",
     # done / delete / snooze
     "reopened": "reopened: #{id} {title}",
     "done": "completed: {title}",
@@ -250,6 +251,7 @@ IT = {
     "detail_subtasks": "sottopromemoria",
     "flag_flagged": "flaggato",
     "flag_urgent": "URGENTE",
+    "flag_overdue": "SCADUTO",
     "reopened": "riaperto: #{id} {title}",
     "done": "completato: {title}",
     "done_next": "completato: {title} → prossima occorrenza {when}",

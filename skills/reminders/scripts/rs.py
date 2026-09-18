@@ -74,26 +74,56 @@ DEFAULTS = {
 # La settimana comincia SEMPRE di lunedi: non e' una preferenza configurabile.
 WEEK_START = 0
 
-GROCERY_CATEGORIES = {
-    "Ortofrutta": ["mela", "mele", "banana", "banane", "pomodoro", "pomodori", "insalata", "patate",
-                   "carote", "cipolla", "cipolle", "limone", "limoni", "arancia", "arance", "zucchine",
-                   "melanzane", "frutta", "verdura", "spinaci", "broccoli", "avocado", "uva", "pera", "pere"],
-    "Carne e pesce": ["pollo", "manzo", "maiale", "salsiccia", "prosciutto", "salame", "tonno", "salmone",
-                      "pesce", "gamberi", "carne", "bistecca", "mortadella", "bresaola"],
-    "Latticini e uova": ["latte", "formaggio", "uova", "uovo", "burro", "yogurt", "ricotta", "mozzarella",
-                         "parmigiano", "panna", "stracchino"],
-    "Pane e cereali": ["pane", "pasta", "riso", "farina", "biscotti", "cracker", "grissini",
-                       "cereali", "polenta", "orzo", "farro", "pangrattato"],
-    "Dispensa": ["olio", "sale", "zucchero", "caffe", "aceto", "passata", "legumi", "fagioli", "ceci",
-                 "lenticchie", "miele", "marmellata", "maionese", "spezie", "pepe", "sugo", "pelati",
-                 "cioccolato", "snack", "biscotto"],
-    "Surgelati": ["surgelat", "gelato", "piselli"],
-    "Bevande": ["acqua", "vino", "birra", "succo", "aranciata", "cola", "spumante"],
-    "Igiene e casa": ["detersivo", "sapone", "shampoo", "dentifricio", "carta igienica", "spugna",
-                      "ammorbidente", "candeggina", "sacchi", "scottex", "deodorante", "rasoio",
-                      "assorbenti", "crema", "spazzolino"],
-    "Altro": [],
-}
+# Categorie della spesa: chiave interna → etichetta per lingua → parole chiave
+# (entrambe le lingue, così "milk" e "latte" finiscono nella stessa categoria).
+GROCERY = [
+    ("produce", {"it": "Ortofrutta", "en": "Produce"},
+     ["mela", "mele", "banana", "banane", "pomodoro", "pomodori", "insalata", "patate", "carote",
+      "cipolla", "cipolle", "limone", "limoni", "arancia", "arance", "zucchine", "melanzane",
+      "frutta", "verdura", "spinaci", "broccoli", "avocado", "uva", "pera", "pere", "funghi",
+      "apple", "apples", "bananas", "tomato", "tomatoes", "salad", "potato", "potatoes", "carrot",
+      "carrots", "onion", "onions", "lemon", "lemons", "orange", "oranges", "courgette",
+      "aubergine", "eggplant", "fruit", "vegetables", "spinach", "grapes", "pear", "pears"]),
+    ("meat_fish", {"it": "Carne e pesce", "en": "Meat & fish"},
+     ["pollo", "manzo", "maiale", "salsiccia", "prosciutto", "salame", "tonno", "salmone", "pesce",
+      "gamberi", "carne", "bistecca", "mortadella", "bresaola",
+      "chicken", "beef", "pork", "sausage", "ham", "salami", "tuna", "salmon", "fish", "prawns",
+      "shrimp", "meat", "steak", "bacon"]),
+    ("dairy", {"it": "Latticini e uova", "en": "Dairy & eggs"},
+     ["latte", "formaggio", "uova", "uovo", "burro", "yogurt", "ricotta", "mozzarella", "parmigiano",
+      "panna", "stracchino",
+      "milk", "cheese", "egg", "eggs", "butter", "yoghurt", "cream", "parmesan"]),
+    ("bakery", {"it": "Pane e cereali", "en": "Bread & grains"},
+     ["pane", "pasta", "riso", "farina", "biscotti", "cracker", "grissini", "cereali", "polenta",
+      "orzo", "farro", "pangrattato",
+      "bread", "rice", "flour", "biscuits", "cookies", "cereal", "barley", "breadcrumbs"]),
+    ("pantry", {"it": "Dispensa", "en": "Pantry"},
+     ["olio", "sale", "zucchero", "caffe", "aceto", "passata", "legumi", "fagioli", "ceci",
+      "lenticchie", "miele", "marmellata", "maionese", "spezie", "pepe", "sugo", "pelati",
+      "cioccolato", "snack", "te", "tonno in scatola",
+      "oil", "salt", "sugar", "coffee", "vinegar", "beans", "chickpeas", "lentils", "honey", "jam",
+      "mayonnaise", "spices", "pepper", "sauce", "chocolate", "tea", "canned"]),
+    ("frozen", {"it": "Surgelati", "en": "Frozen"},
+     ["surgelat", "gelato", "piselli", "bastoncini", "frozen", "ice cream", "peas"]),
+    ("drinks", {"it": "Bevande", "en": "Drinks"},
+     ["acqua", "vino", "birra", "succo", "aranciata", "cola", "spumante", "bibita",
+      "water", "wine", "beer", "juice", "soda", "lemonade"]),
+    ("household", {"it": "Igiene e casa", "en": "Household & hygiene"},
+     ["detersivo", "sapone", "shampoo", "dentifricio", "carta igienica", "spugna", "ammorbidente",
+      "candeggina", "sacchi", "scottex", "deodorante", "rasoio", "assorbenti", "crema",
+      "spazzolino", "dish soap", "soap", "toothpaste", "toilet paper", "sponge", "bleach",
+      "bin bags", "deodorant", "razor", "toothbrush"],
+    ),
+    ("other", {"it": "Altro", "en": "Other"}, []),
+]
+
+GROCERY_LABELS = {key: labels for key, labels, _ in GROCERY}
+GROCERY_CATEGORIES = {key: words for key, _, words in GROCERY}
+
+
+def grocery_label(conn, key: str) -> str:
+    labels = GROCERY_LABELS.get(key, {})
+    return labels.get(lang(conn)) or labels.get("en") or key
 
 # Elenchi: nessuno pre-creato (le viste integrate sono calcolate). Un promemoria
 # puo' anche non appartenere ad alcun elenco.
@@ -702,7 +732,7 @@ def human(conn, rem, ref: datetime | None = None) -> str:
     mark = "x" if rem["completed_at"] else "·"
     pri = {1: " !!!", 5: " !!", 9: " !"}.get(rem["priority"] or 0, "")
     flag = " ⚑" if rem["flagged"] else ""
-    urg = " URGENTE" if rem["urgent"] else ""
+    urg = " " + tl(conn, "flag_urgent") if rem["urgent"] else ""
     when = ""
     if rem["due_at"]:
         d = from_iso(rem["due_at"])
@@ -714,7 +744,7 @@ def human(conn, rem, ref: datetime | None = None) -> str:
     late = ""
     if rem["due_at"] and not rem["completed_at"] and from_iso(rem["due_at"]) < ref:
         if rem["due_has_time"] or get_setting(conn, "show_all_day_overdue", "0") == "1":
-            late = " SCADUTO"
+            late = " " + tl(conn, "flag_overdue")
     rep = ""
     if rem["repeat_rule"]:
         desc = describe_repeat(conn, json.loads(rem["repeat_rule"]))
@@ -732,12 +762,13 @@ def tags_of(rem) -> list[str]:
 
 
 def grocery_category(title: str) -> str:
+    """Chiave della categoria per un articolo (fallback: 'other')."""
     t = title.lower()
-    for cat, words in GROCERY_CATEGORIES.items():
+    for key, words in GROCERY_CATEGORIES.items():
         for w in words:
             if w in t:
-                return cat
-    return "Altro"
+                return key
+    return "other"
 
 
 def smart_ids(conn, include_completed: bool = False) -> dict[int, set[int]]:

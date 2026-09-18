@@ -5,7 +5,7 @@ report pass/fail. Gira su un profilo temporaneo, non tocca dati reali.
     python3 selftest.py        # esce 0 se tutto passa
 """
 import os, shutil, subprocess, sys, sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import tempfile
 SK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -101,6 +101,29 @@ def test_lists():
     gc = c.execute("SELECT is_grocery FROM lists WHERE name='Groceries'").fetchone()[0]
     RESULTS.append((g, "flag grocery salvato", gc == 1, ""))
     c.close()
+
+    # Cancellare un elenco non deve portarsi via i promemoria in silenzio.
+    t(g, "elenco usa-e-getta", ["lists", "add", "Effimero"])
+    add("Dentro l'elenco", "--list", "Effimero", group=g)
+    out = t(g, "delete elenco con dentro un promemoria (rifiuta)",
+            ["lists", "delete", "Effimero"], want="with-reminders")
+    c = sqlite3.connect(DB)
+    still = c.execute("SELECT COUNT(*) FROM reminders WHERE title='Dentro l''elenco'").fetchone()[0]
+    c.close()
+    RESULTS.append((g, "il promemoria sopravvive al delete dell'elenco", still == 1, f"rimasti={still}"))
+    t(g, "delete con --with-reminders", ["lists", "delete", "Effimero", "--with-reminders"])
+    c = sqlite3.connect(DB)
+    gone = c.execute("SELECT COUNT(*) FROM reminders WHERE title='Dentro l''elenco'").fetchone()[0]
+    c.close()
+    RESULTS.append((g, "con --with-reminders sparisce davvero", gone == 0, f"rimasti={gone}"))
+
+    # Un genitore inesistente deve dare un errore leggibile, non una traccia.
+    rc, out, err = None, "", ""
+    r = subprocess.run([sys.executable, "rem.py", "add", "Orfano", "--parent", "99999"],
+                       cwd=SCRIPTS, capture_output=True, text=True)
+    RESULTS.append((g, "genitore inesistente: nessuna traccia",
+                    "Traceback" not in r.stderr and "parent" in (r.stdout + r.stderr).lower(),
+                    (r.stderr or r.stdout).strip()[:120]))
 
 
 # ─── C. sezioni + kanban ─────────────────────────────────────────────────────

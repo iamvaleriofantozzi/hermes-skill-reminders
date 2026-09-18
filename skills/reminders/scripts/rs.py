@@ -287,13 +287,8 @@ CREATE INDEX IF NOT EXISTS idx_alarms_fire ON alarms(fire_at, sent_at);
 
 # Nessun elenco viene creato automaticamente. Come in Apple Reminders, le viste
 # integrate (Oggi, Programmato, Tutti, Flaggati, Urgenti, Anytime, Completati)
-# sono CALCOLATE, non elenchi: gli elenchi li crea l'utente. L'unica eccezione
-# e' l'elenco predefinito, creato su richiesta al primo promemoria senza --list.
-DEFAULT_LIST_NAMES = {"en": "Reminders", "it": "Promemoria"}
-
-
-def default_list_name(conn) -> str:
-    return DEFAULT_LIST_NAMES.get(lang(conn), DEFAULT_LIST_NAMES["en"])
+# sono CALCOLATE, non elenchi: gli elenchi li crea l'utente. Un promemoria puo'
+# anche non appartenere ad alcun elenco.
 
 
 def now() -> datetime:
@@ -527,17 +522,6 @@ def effective_estimate(rem) -> int | None:
         return int(own)
     rollup = row_get(rem, "est_effective")
     return int(rollup) if rollup else None
-
-
-def parse_alarm(text: str, due_at: str | None, base: datetime | None = None) -> str | None:
-    """'30m' = 30 min prima della scadenza; altrimenti orario/data assoluta."""
-    if not text:
-        return None
-    off = parse_offset(text.lstrip("-"))
-    if off is not None and due_at:
-        return iso(from_iso(due_at) - timedelta(minutes=off))
-    dt, _ = parse_when(text, base)
-    return iso(dt) if dt else None
 
 
 # ------------------------------------------------------------------ ricorrenze

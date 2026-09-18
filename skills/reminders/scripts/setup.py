@@ -83,19 +83,6 @@ def actions_wrapper_path() -> Path:
     return PROFILE_DIR / "scripts" / ACTIONS_WRAPPER_NAME
 
 
-def find_job_id(name: str) -> str | None:
-    """Id del job dal registro, cercato per nome (piu' affidabile del parsing dell'output)."""
-    jobs_file = PROFILE_DIR / "cron" / "jobs.json"
-    try:
-        data = json.loads(jobs_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    for job in (data.get("jobs") or []):
-        if job.get("name") == name:
-            return str(job.get("id") or "")
-    return None
-
-
 def find_job_by_script(script: str) -> str | None:
     """Id del job che esegue questo script — l'identita' vera, non il nome.
 
@@ -197,7 +184,7 @@ def do_install(register: bool, deliver: str) -> int:
             else:
                 ares = subprocess.run(acmd, capture_output=True, text=True)
                 if ares.returncode == 0:
-                    jid = find_job_id(ACTIONS_JOB_NAME)
+                    jid = find_job_by_script(ACTIONS_WRAPPER_NAME)
                     if jid:
                         rs.set_setting(conn, "action_job_id", jid, commit=True)
                     print(f"  {L('setup_actions_job'):<10}"

@@ -173,6 +173,8 @@ rem.py delete 12
 rem.py lists                # all lists
 rem.py lists add "Travel" --icon airplane --folder "Personal" --pinned
 rem.py lists default Work
+rem.py lists delete "Travel"                       # refuses if it still holds reminders
+rem.py lists delete "Travel" --with-reminders      # delete them too — explicit
 rem.py section add Work "In progress" | section Work | section rm Work "In progress"
 rem.py smart "Urgent" --urgent | smart "Next 3 days" --due-within 3
 rem.py template save "Deliverable" --from 12 | template apply "Deliverable" --list Work

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from datetime import timedelta
 
@@ -196,6 +195,28 @@ def show_one(conn, rem_id: int, as_json: bool = False) -> None:
 
 # --------------------------------------------------------------------- comandi
 
+def delete_list(conn, lid: int, name: str, with_reminders: bool, quiet: bool = False) -> bool:
+    """Cancella un elenco. Non porta via i promemoria se non glielo si chiede.
+
+    Cancellare un elenco cancellava in silenzio tutto quello che conteneva: il
+    modo esplicito per eliminare un promemoria e' `rem.py delete`, quindi qui si
+    rifiuta e si spiega come procedere. Con `with_reminders` si procede.
+    `quiet` per i chiamanti che stampano un messaggio proprio (smart list).
+    """
+    n = conn.execute("SELECT COUNT(*) c FROM reminders WHERE list_id=?", (lid,)).fetchone()["c"]
+    if n and not with_reminders:
+        print(L(conn, "list_has_reminders", name=name, n=n))
+        return False
+    if n:
+        conn.execute("DELETE FROM reminders WHERE list_id=?", (lid,))
+    conn.execute("DELETE FROM sections WHERE list_id=?", (lid,))
+    conn.execute("DELETE FROM lists WHERE id=?", (lid,))
+    conn.commit()
+    if not quiet:
+        print(L(conn, "list_deleted", name=name, n=n))
+    return True
+
+
 def cmd_lists(conn, args):
     a = args.action
     if a in ("add", "delete", "mute", "unmute", "pin", "unpin", "default", "rename", "folder"):
@@ -223,12 +244,8 @@ def cmd_lists(conn, args):
             print(L(conn, "list_not_found", name=args.name))
             return
         if a == "delete":
-            n = conn.execute("SELECT COUNT(*) c FROM reminders WHERE list_id=?", (lid,)).fetchone()["c"]
-            conn.execute("DELETE FROM reminders WHERE list_id=?", (lid,))
-            conn.execute("DELETE FROM sections WHERE list_id=?", (lid,))
-            conn.execute("DELETE FROM lists WHERE id=?", (lid,))
-            conn.commit()
-            print(L(conn, "list_deleted", name=args.name, n=n))
+            if not delete_list(conn, lid, args.name, args.with_reminders):
+                return
         elif a == "mute":
             conn.execute("UPDATE lists SET muted=1 WHERE id=?", (lid,))
             conn.commit()
@@ -341,6 +358,10 @@ def cmd_add(conn, args):
         est_min = rs.parse_estimate(args.est)
         if est_min is None:
             print(L(conn, "bad_duration", value=args.est))
+            return
+    if getattr(args, "parent", None) is not None:
+        if not conn.execute("SELECT 1 FROM reminders WHERE id=?", (args.parent,)).fetchone():
+            print(L(conn, "parent_not_found", id=args.parent))
             return
     repeat_total = None
     if getattr(args, "repeat_count", None):
@@ -749,8 +770,8 @@ def cmd_smart(conn, args):
         if not lid:
             print(L(conn, "smart_not_found"))
             return
-        conn.execute("DELETE FROM lists WHERE id=?", (lid,))
-        conn.commit()
+        if not delete_list(conn, lid, args.name, getattr(args, "with_reminders", False), quiet=True):
+            return
         print(L(conn, "smart_deleted", name=args.name))
         return
     rules: dict = {}
@@ -1031,6 +1052,8 @@ def main() -> int:
     pl.add_argument("--folder")
     pl.add_argument("--pinned", action="store_true")
     pl.add_argument("--grocery", action="store_true")
+    pl.add_argument("--with-reminders", action="store_true",
+                    help="delete the reminders inside too (default: refuse)")
     pl.add_argument("--default", action="store_true")
     pl.set_defaults(func=cmd_lists)
 
@@ -1053,6 +1076,8 @@ def main() -> int:
     psm.add_argument("--no-date", action="store_true")
     psm.add_argument("--any", action="store_true", help="match ANY filter instead of all")
     psm.add_argument("--icon", default="line.3.horizontal.decrease.circle")
+    psm.add_argument("--with-reminders", action="store_true",
+                     help="delete the reminders inside too (default: refuse)")
     psm.set_defaults(func=cmd_smart)
 
     pa = sub.add_parser("add", help="create a reminder")

@@ -101,6 +101,22 @@ def reschedule(conn, rem_id: int, count: int, ref, nag_min: int, nag_max: int) -
                  (count, rs.iso(nxt) if nxt else None, rs.iso(ref), rem_id))
 
 
+def pump_actions(conn) -> None:
+    """Sveglia il job agente se c'e' un'azione mai tentata.
+
+    Il job resta dormiente (nessun costo) finche' la coda non ha una riga nuova.
+    Se il job non e' configurato resta tutto silenzioso: non e' un guasto.
+    """
+    if not rs.action_job_id(conn) or not rs.pending_actions(conn, only_fresh=True):
+        return
+    ok, detail = rs.trigger_action_job(conn)
+    if ok:
+        rs.mark_actions_attempted(conn)
+    else:
+        # Non e' fatale: la riga resta fresca e il prossimo tick riprova.
+        print(rs.tl(conn, "action_trigger_err", err=detail), file=sys.stderr)
+
+
 def main() -> int:
     dry = "--dry-run" in sys.argv
     conn = rs.connect()
@@ -109,14 +125,22 @@ def main() -> int:
     # c'e' altro da consegnare, altrimenti restano in coda per sempre.
     stale = 0 if dry else drop_stale_early(conn, ref)
     fired, nags = gather(conn, ref)
+    # Risultati delle azioni concluse: viaggiano sul canale dei promemoria, che
+    # e' l'unico che consegna in modo affidabile anche da un profilo satellite.
+    results = rs.undelivered_results(conn)
 
-    if not fired and not nags:
+    if not fired and not nags and not results:
         if stale:
             conn.commit()
+        # Anche senza nulla da consegnare: una sveglia puo' essere andata persa
+        # in un tick precedente, e questo e' l'unico posto che la ritenta.
+        if not dry:
+            pump_actions(conn)
         conn.close()
         return 0
 
     lines = render(conn, fired, nags, ref)
+    lines += [f"{a['title']}: {a['result']}" for a in results]
     header = rs.tl(conn, "tick_title", n=len(lines))
 
     if dry:
@@ -135,6 +159,7 @@ def main() -> int:
 
     for a in fired:
         conn.execute("UPDATE alarms SET sent_at=? WHERE id=?", (rs.iso(ref), a["alarm_id"]))
+        rs.enqueue_action(conn, a)
         count = int(a["notify_count"] or 0) + 1
         if a["kind"] == "due":
             reschedule(conn, a["id"], count, ref, nag_min, nag_max)
@@ -145,7 +170,11 @@ def main() -> int:
     for r in nags:
         reschedule(conn, r["id"], int(r["notify_count"] or 0) + 1, ref, nag_min, nag_max)
 
+    for a in results:
+        rs.mark_result_delivered(conn, a["id"])
+
     conn.commit()
+    pump_actions(conn)
     conn.close()
     return 0
 

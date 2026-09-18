@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,18 @@ def deaccent(text: str) -> str:
     la forma accentata è quella corretta in italiano e va accettata."""
     return "".join(c for c in unicodedata.normalize("NFKD", text)
                    if not unicodedata.combining(c))
+
+def profile_name() -> str:
+    """Nome del profilo Hermes che ospita la skill ('' se non deducibile).
+
+    Serve per richiamare `hermes -p <profilo> cron run`. Il profilo e' il
+    genitore della cartella `reminders` in cui vive il database; se il layout
+    non lo rende riconoscibile si restituisce vuoto e si lascia scegliere a
+    hermes il profilo di default.
+    """
+    name = Path(DB_DIR).parent.name
+    return "" if name.startswith(".") else name
+
 
 def data_dir() -> Path:
     """Cartella dati del profilo che ospita questa skill.
@@ -193,6 +206,9 @@ CREATE TABLE IF NOT EXISTS reminders (
   flagged INTEGER DEFAULT 0,
   urgent INTEGER DEFAULT 0,
   estimate_minutes INTEGER,
+  action_prompt TEXT,
+  action_skill TEXT,
+  action_allow_write INTEGER DEFAULT 0,
   completed_at TEXT,
   repeat_rule TEXT,
   repeat_total INTEGER,
@@ -229,6 +245,37 @@ CREATE TABLE IF NOT EXISTS templates (
 CREATE VIRTUAL TABLE IF NOT EXISTS reminders_fts USING fts5(
   title, notes, tags, content='reminders', content_rowid='id'
 );
+"""
+
+ACTION_QUEUE_SQL = """
+-- Azioni da far eseguire all'agente quando un promemoria scade. Una riga per
+-- occorrenza, cosi' una ricorrenza esegue l'azione ogni volta.
+-- La coda e' la verita': se il trigger verso l'agente fallisce, la riga resta
+-- pendente e il tick successivo ci riprova.
+--
+-- L'identita' dell'occorrenza e' (reminder_id, fire_at), non alarm_id: gli
+-- allarmi vengono ricreati a ogni completamento (rebuild_alarms) e SQLite
+-- riusa i rowid, quindi alarm_id non e' stabile. Nessuna FK su alarm_id per
+-- lo stesso motivo: un ON DELETE CASCADE cancellerebbe l'azione proprio quando
+-- chiudi il promemoria subito dopo lo scatto.
+CREATE TABLE IF NOT EXISTS action_queue (
+  id INTEGER PRIMARY KEY,
+  reminder_id INTEGER REFERENCES reminders(id) ON DELETE CASCADE,
+  alarm_id INTEGER,
+  fire_at TEXT,
+  title TEXT,
+  prompt TEXT NOT NULL,
+  skill TEXT,
+  allow_write INTEGER DEFAULT 0,
+  created_at TEXT,
+  attempted_at TEXT,
+  done_at TEXT,
+  result TEXT,
+  delivered_at TEXT,
+  error TEXT,
+  UNIQUE(reminder_id, fire_at)
+);
+CREATE INDEX IF NOT EXISTS idx_actions_pending ON action_queue(done_at, attempted_at);
 """
 
 # Indici: creati DOPO la migrazione. Un indice su una colonna che deve ancora
@@ -269,6 +316,7 @@ def connect(path: str = DB_PATH) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    conn.executescript(ACTION_QUEUE_SQL)
     _migrate(conn)
     conn.executescript(SCHEMA_INDEXES)
     conn.executescript(REM_TRIGGERS_SQL)
@@ -293,6 +341,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "sort_order": "INTEGER DEFAULT 0", "nag_at": "TEXT", "early_minutes": "INTEGER",
         "notify_count": "INTEGER DEFAULT 0", "estimate_minutes": "INTEGER",
         "repeat_total": "INTEGER", "repeat_index": "INTEGER DEFAULT 1",
+        "action_prompt": "TEXT", "action_skill": "TEXT",
+        "action_allow_write": "INTEGER DEFAULT 0",
     }.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE reminders ADD COLUMN {name} {decl}")
@@ -303,6 +353,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        "is_default": "INTEGER DEFAULT 0"}.items():
         if name not in lcols:
             conn.execute(f"ALTER TABLE lists ADD COLUMN {name} {decl}")
+    # action_queue ha cambiato chiave durante lo sviluppo (alarm_id → la coppia
+    # reminder_id+fire_at): CREATE TABLE IF NOT EXISTS non tocca una tabella che
+    # esiste gia', e una UNIQUE non si cambia con ALTER. La tabella e' vuota per
+    # costruzione in ogni installazione precedente, quindi si ricrea.
+    acols = {r["name"] for r in conn.execute("PRAGMA table_info(action_queue)")}
+    if acols and "fire_at" not in acols:
+        if conn.execute("SELECT COUNT(*) c FROM action_queue").fetchone()["c"] == 0:
+            conn.execute("DROP TABLE action_queue")
+            conn.executescript(ACTION_QUEUE_SQL)
+            acols = {r["name"] for r in conn.execute("PRAGMA table_info(action_queue)")}
+    for name, decl in {"result": "TEXT", "delivered_at": "TEXT"}.items():
+        if acols and name not in acols:
+            conn.execute(f"ALTER TABLE action_queue ADD COLUMN {name} {decl}")
 
 
 def get_setting(conn, key: str, default: str | None = None) -> str:
@@ -639,6 +702,106 @@ def advance(conn, rem, from_dt: datetime | None = None) -> str | None:
             return None
     conn.execute("UPDATE reminders SET repeat_index=? WHERE id=?", (idx + 1, rem["id"]))
     return iso(nxt)
+
+
+# ------------------------------------------------------------------- azioni
+
+def enqueue_action(conn, alarm) -> int | None:
+    """Accoda l'azione del promemoria quando scatta l'allarme di scadenza.
+
+    Solo `kind='due'`: l'azione va eseguita all'ora prestabilita, non sull'avviso
+    in anticipo. UNIQUE(alarm_id) rende la chiamata idempotente.
+
+    L'id del promemoria arriva da `reminder_id` se la riga e' un allarme puro,
+    altrimenti da `id`: le righe di tick.py sono `a.*` + `r.*`, quindi `id` e'
+    gia' quello del promemoria e `reminder_id` non compare affatto.
+    """
+    if alarm["kind"] != "due":
+        return None
+    rid = row_get(alarm, "reminder_id") or alarm["id"]
+    rem = conn.execute("SELECT * FROM reminders WHERE id=?", (rid,)).fetchone()
+    if not rem or not row_get(rem, "action_prompt"):
+        return None
+    cur = conn.execute(
+        """INSERT OR IGNORE INTO action_queue(reminder_id, alarm_id, fire_at, title, prompt,
+                                              skill, allow_write, created_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (rem["id"], alarm["alarm_id"], alarm["fire_at"], rem["title"], rem["action_prompt"],
+         row_get(rem, "action_skill"), row_get(rem, "action_allow_write") or 0, iso(now())))
+    return cur.lastrowid
+
+
+def pending_actions(conn, only_fresh: bool = False):
+    """Azioni in coda non ancora concluse. `only_fresh` = mai tentate."""
+    where = "done_at IS NULL"
+    if only_fresh:
+        where += " AND attempted_at IS NULL"
+    return conn.execute(
+        f"SELECT * FROM action_queue WHERE {where} ORDER BY id").fetchall()
+
+
+def actions_gate_text(conn) -> str:
+    """Testo del gate: cambia solo quando cambia la coda.
+
+    Deterministico per costruzione — nessun timestamp, nessun contatore che
+    avanza: il gate confronta l'hash, quindi un output che cambia a ogni tick
+    farebbe partire l'agente ogni tick.
+    """
+    lines = []
+    for a in pending_actions(conn):
+        skill = f" skill={a['skill']}" if a["skill"] else ""
+        lines.append(f"#{a['id']}{skill} :: {a['prompt']}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def action_job_id(conn) -> str | None:
+    return get_setting(conn, "action_job_id") or None
+
+
+def trigger_action_job(conn) -> tuple[bool, str]:
+    """Sveglia il job agente che esegue le azioni in coda.
+
+    Best-effort: non solleva mai. Il trigger e' un'accelerazione, non la verita'
+    — la verita' e' la riga in coda.
+    """
+    job_id = action_job_id(conn)
+    if not job_id:
+        return False, "no action_job_id"
+    set_setting(conn, "action_triggered_at", iso(now()), commit=True)
+    profile = profile_name()
+    cmd = ["hermes"] + (["-p", profile] if profile else []) + ["cron", "run", job_id]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)[:200]
+    out = (r.stdout or "") + (r.stderr or "")
+    return (r.returncode == 0 and "Triggered" in out), out.strip()[:200]
+
+
+def mark_actions_attempted(conn) -> int:
+    """Segna le azioni mai tentate come 'chieste all'agente'.
+
+    Chiamata solo dopo una sveglia riuscita: una riga fresca viene affidata al
+    job una volta sola, cosi' tick.py (che gira ogni minuto) non lo richiama in
+    continuazione. Se l'agente non riesce a concluderla, la riga resta visibile
+    e la riprende il giro di sicurezza o `actions retry`.
+    """
+    cur = conn.execute(
+        "UPDATE action_queue SET attempted_at=? WHERE done_at IS NULL AND attempted_at IS NULL",
+        (iso(now()),))
+    conn.commit()
+    return cur.rowcount or 0
+
+
+def undelivered_results(conn):
+    """Azioni concluse con un risultato che il canale dei promemoria deve ancora recapitare."""
+    return conn.execute(
+        "SELECT * FROM action_queue WHERE done_at IS NOT NULL AND result IS NOT NULL "
+        "AND delivered_at IS NULL ORDER BY id").fetchall()
+
+
+def mark_result_delivered(conn, qid: int) -> None:
+    conn.execute("UPDATE action_queue SET delivered_at=? WHERE id=?", (iso(now()), qid))
 
 
 # --------------------------------------------------------------------- allarmi

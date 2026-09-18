@@ -75,6 +75,17 @@ progress.
 - Completing one doesn't archive it — the date rolls forward and it stays open
 - No accents required: `lunedì` and `lunedi` both work, IT and EN
 
+### 🤖 Actions — the reminder that runs something
+- Give a reminder an **action** and the agent performs it the moment it comes due,
+  while you still get the reminder
+- *"Monday 9:00: sync the mail and summarise it"* — the reminder for you, the work
+  for the agent
+- 🆓 **Costs nothing while idle** — the job is only woken when an action is queued,
+  never polls
+- 🧾 **Result delivered on the reminder channel**, and kept on record
+- 🔒 **Read-only by default**; writing needs an explicit per-reminder opt-in
+- Repeats with the recurrence: a weekly reminder runs its action weekly
+
 ### ⏱️ Timing
 - Due with a time, or **all-day** (pings at an hour you choose)
 - ⏳ **Early reminder** — an advance nudge, from 5 minutes to a month before

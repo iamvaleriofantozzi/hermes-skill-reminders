@@ -312,6 +312,55 @@ So a reminder due at 09:00 while the agent was off arrives when the agent
 restarts, saying `OVERDUE` — not three times, and without a meaningless
 "upcoming" line for an event already gone.
 
+## Actions — a reminder that also runs something
+
+A reminder can carry an **action**: an instruction the agent executes when the
+reminder comes due. The user gets the reminder; the agent gets the action.
+
+```bash
+rem.py add "Answer the mail" --due "monday 9:00" --repeat weekly:mon \
+    --action "Sync RINA mail and summarise what needs a reply" --action-skill rina_mail
+```
+
+### How it runs
+
+1. `tick.py` fires the due alarm and **queues** the action — one row per
+   occurrence, so a weekly reminder runs it every week.
+2. It wakes the agent job with `hermes cron run <job>`: an ordinary agent cron
+   with a real schedule (`0 4 * * *`) that doubles as a daily safety net.
+3. The agent does the work, stores the outcome (`actions done <id> --result …`)
+   and answers `[SILENT]`.
+4. The **next tick** delivers that result through the reminder channel.
+
+The job never polls: between events the agent does not run at all, and a job
+that is merely *paused* cannot be woken this way, so the schedule stays enabled.
+The queue is the source of truth — if a wake-up is lost the row stays and the
+next tick tries again; `actions retry` reopens a failed one.
+
+The result travels on the reminder channel deliberately: a satellite profile can
+deliver a script job but not an agent job's own response (`platform 'telegram'
+not configured/enabled`), so the agent stores its output and the working path
+carries it.
+
+### Read-only unless told otherwise
+
+Actions run **autonomously and cannot ask questions**. Unless the reminder was
+created with `--action-allow-write`, the agent is told to gather and report and
+to change nothing outside the machine. Phrase actions as *sync and summarise* or
+*prepare and show me*, and opt into writing per reminder when you mean it — a
+reminder that fires while you are away will otherwise send mail in your name
+unattended.
+
+### Managing the queue
+
+```bash
+rem.py actions                       # what is pending or failed
+rem.py actions done 3 --result "…"   # mark done (--result-file - reads stdin)
+rem.py actions fail 3 "reason"
+rem.py actions retry 3               # queue it again
+rem.py actions run                   # wake the agent now
+```
+
 ## Localisation
 
 ```bash

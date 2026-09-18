@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import timedelta
 
@@ -140,6 +141,12 @@ def show_one(conn, rem_id: int, as_json: bool = False) -> None:
             tot = sum(int(s["estimate_minutes"]) for s in subs)
             print(f"  {L(conn, 'detail_estimate') + ':':<12}{rs.fmt_estimate(tot)}"
                   f"  ({len(subs)} \u00d7 {L(conn, 'detail_subtasks').lower()})")
+    act = rs.row_get(row, "action_prompt")
+    if act:
+        skill = f"  [{rs.row_get(row, 'action_skill')}]" if rs.row_get(row, "action_skill") else ""
+        mode = L(conn, "action_may_write") if rs.row_get(row, "action_allow_write") \
+            else L(conn, "action_readonly")
+        print(f"  {L(conn, 'detail_action') + ':':<12}{act}{skill}  ({mode})")
     al = rs.alarms_of(conn, rem_id)
     if al:
         print(f"  {L(conn, 'detail_alarms') + ':'}")
@@ -344,17 +351,22 @@ def cmd_add(conn, args):
             print(L(conn, "bad_repeat_count"))
             return
         repeat_total = args.repeat_count
+    action_prompt = getattr(args, "action", None)
+    action_skill = getattr(args, "action_skill", None)
+    action_write = 1 if getattr(args, "action_allow_write", False) else 0
     cur = conn.execute(
         """INSERT INTO reminders(list_id, section_id, title, notes, url, attachments, due_at, due_has_time,
                                  early_minutes, priority, flagged, urgent, estimate_minutes, repeat_rule,
                                  repeat_total, repeat_index,
+                                 action_prompt, action_skill, action_allow_write,
                                  tags, parent_id, location_name, location_trigger, location_radius,
                                  sort_order, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (list_id, section_id, args.title, args.notes, args.url, args.attach, due_at,
          1 if has_time else 0, early, rs.PRIORITY.get(args.priority, 0), 1 if args.flag else 0,
          1 if args.urgent else 0, est_min, json.dumps(rule) if rule else None,
          repeat_total, 1,
+         action_prompt, action_skill, action_write,
          args.tags, args.parent,
          args.location, args.location_trigger, args.location_radius, 0, ts, ts))
     rem_id = cur.lastrowid
@@ -586,6 +598,12 @@ def cmd_edit(conn, args):
             return
         else:
             put("repeat_total", args.repeat_count)
+    if getattr(args, "action", None) is not None:
+        put("action_prompt", args.action or None)   # stringa vuota = rimuovi
+    if getattr(args, "action_skill", None):
+        put("action_skill", args.action_skill)
+    if getattr(args, "action_allow_write", None) is not None:
+        put("action_allow_write", 1 if args.action_allow_write else 0)
     if args.flag is not None:
         put("flagged", 1 if args.flag else 0)
     if args.urgent is not None:
@@ -901,6 +919,71 @@ def cmd_fits(conn, args):
         print("  " + L(conn, "fits_packed", when=when))
 
 
+def cmd_actions(conn, args):
+    """Coda delle azioni che i promemoria hanno innescato per l'agente."""
+    op = args.op
+    ts = rs.iso(rs.now())
+    if op == "gate":
+        # Testo deterministico per il gate del cron: silenzio quando la coda e' vuota.
+        sys.stdout.write(rs.actions_gate_text(conn))
+        return
+    if op == "done":
+        if not args.id or not conn.execute("SELECT 1 FROM action_queue WHERE id=?", (args.id,)).fetchone():
+            print(L(conn, "action_missing", id=args.id))
+            return
+        res = getattr(args, "result", None)
+        rf = getattr(args, "result_file", None)
+        if res is None and rf:
+            try:
+                res = sys.stdin.read() if rf == "-" else open(rf, encoding="utf-8").read()
+            except OSError as e:
+                print(L(conn, "action_result_unreadable", err=str(e)[:200]))
+                return
+        conn.execute("UPDATE action_queue SET done_at=?, error=NULL, result=COALESCE(?, result) "
+                     "WHERE id=?", (ts, (res or "").strip() or None, args.id))
+        conn.commit()
+        print(L(conn, "action_done", id=args.id))
+        return
+    if op == "fail":
+        if not args.id or not conn.execute("SELECT 1 FROM action_queue WHERE id=?", (args.id,)).fetchone():
+            print(L(conn, "action_missing", id=args.id))
+            return
+        conn.execute("UPDATE action_queue SET error=?, attempted_at=COALESCE(attempted_at,?) WHERE id=?",
+                     (args.message or "", ts, args.id))
+        conn.commit()
+        print(L(conn, "action_failed", id=args.id))
+        return
+    if op == "retry":
+        conn.execute("UPDATE action_queue SET attempted_at=NULL, done_at=NULL, error=NULL WHERE id=?",
+                     (args.id,))
+        conn.commit()
+        print(L(conn, "action_retry", id=args.id))
+        return
+    if op == "run":
+        print(trigger_action_job(conn))
+        return
+    rows = rs.pending_actions(conn)
+    if not rows:
+        print(L(conn, "actions_empty"))
+        return
+    print(L(conn, "actions_title", n=len(rows)))
+    for a in rows:
+        state = "↻" if a["attempted_at"] else "·"
+        skill = f"  [{a['skill']}]" if a["skill"] else ""
+        print(f"  {state} #{a['id']} {a['title']}{skill}")
+        print(f"      {a['prompt']}")
+        if a["error"]:
+            print(f"      ✗ {a['error']}")
+
+
+def trigger_action_job(conn) -> str:
+    """Versione CLI: sveglia il job agente e restituisce un messaggio leggibile."""
+    ok, detail = rs.trigger_action_job(conn)
+    if ok:
+        return L(conn, "action_triggered")
+    return L(conn, "action_trigger_err", err=detail)
+
+
 def cmd_stats(conn, args):
     ref = rs.now()
 
@@ -978,6 +1061,10 @@ def main() -> int:
     pa.add_argument("--due")
     pa.add_argument("--early", help="advance warning: 30m, 2h, 1d, 1w")
     pa.add_argument("--est", help="estimated time to complete: 45m, 2h, 1h30")
+    pa.add_argument("--action", help="instruction for the agent to run at the due time")
+    pa.add_argument("--action-skill", help="skill the agent should load for the action")
+    pa.add_argument("--action-allow-write", action="store_true",
+                    help="let the action change things outside (default: read-only)")
     pa.add_argument("--alarm", action="append", help="extra alarm (repeatable): 2h, 1d, 18:00")
     pa.add_argument("--no-alarm", action="store_true")
     pa.add_argument("--priority", choices=list(rs.PRIORITY), default="none")
@@ -1013,6 +1100,15 @@ def main() -> int:
     pcol = sub.add_parser("columns", help="column (kanban) view of a list")
     pcol.add_argument("name")
     pcol.set_defaults(func=cmd_columns)
+
+    pact = sub.add_parser("actions", help="agent actions queued by reminders")
+    pact.add_argument("op", nargs="?", default="list",
+                      choices=["list", "done", "fail", "retry", "run", "gate"])
+    pact.add_argument("id", nargs="?", type=int)
+    pact.add_argument("message", nargs="?", help="failure reason")
+    pact.add_argument("--result", help="outcome text, delivered through the reminders channel")
+    pact.add_argument("--result-file", help="read the outcome from a file ('-' for stdin)")
+    pact.set_defaults(func=cmd_actions)
 
     pf = sub.add_parser("fits", help="what fits in a given amount of time")
     pf.add_argument("window", help="available time: 30m, 1h, 1h30")
@@ -1052,6 +1148,9 @@ def main() -> int:
     pe.add_argument("--no-due", action="store_true")
     pe.add_argument("--early")
     pe.add_argument("--est", help="estimated time to complete: 45m, 2h, 1h30, none")
+    pe.add_argument("--action", help="instruction for the agent (empty string clears it)")
+    pe.add_argument("--action-skill")
+    pe.add_argument("--action-allow-write", action="store_true", default=None)
     pe.add_argument("--repeat-count", type=int,
                     help="limit the series to N occurrences (0 = back to unlimited)")
     pe.add_argument("--priority", choices=list(rs.PRIORITY))

@@ -426,7 +426,105 @@ def test_delivery():
                     not any("upcoming" in l for l in rec), str(rec)))
 
 
-# ─── O. i18n ─────────────────────────────────────────────────────────────────
+def run_tick(*extra):
+    """Esegue tick.py e restituisce stdout."""
+    r = subprocess.run([sys.executable, "tick.py", *extra], cwd=SCRIPTS,
+                       capture_output=True, text=True, timeout=120)
+    return r.stdout
+
+
+# ─── Q. azioni ───────────────────────────────────────────────────────────────
+def test_actions():
+    g = "Q · azioni"
+    sh("settings", "set", "language", "en")
+
+    gate0 = subprocess.run([sys.executable, "rem.py", "actions", "gate"], cwd=SCRIPTS,
+                           capture_output=True, text=True).stdout
+    RESULTS.append((g, "gate vuoto a riposo", gate0.strip() == "", repr(gate0)))
+
+    # La scadenza accoda; l'avviso in anticipo no.
+    add("Azione base", "--due", "2026-01-01 09:00", "--early", "2h",
+        "--action", "Riporta qualcosa di utile", group=g)
+    i = CTX["id"]["Azione base"]
+    c = sqlite3.connect(DB)
+    # La scadenza e' nel passato: la metto da parte, altrimenti scatterebbe
+    # insieme all'avviso e accoderebbe l'azione, falsando il test dell'early.
+    c.execute("UPDATE alarms SET sent_at='2020-01-01T00:00:00' "
+              "WHERE reminder_id=? AND kind='due'", (i,))
+    c.execute("UPDATE alarms SET fire_at='2020-01-01T07:00:00', sent_at=NULL "
+              "WHERE reminder_id=? AND kind='early'", (i,))
+    c.commit()
+    c.close()
+    run_tick()
+    c = sqlite3.connect(DB)
+    n = c.execute("SELECT COUNT(*) FROM action_queue").fetchone()[0]
+    c.close()
+    RESULTS.append((g, "l'avviso in anticipo NON accoda", n == 0, f"righe={n}"))
+
+    c = sqlite3.connect(DB)
+    c.execute("UPDATE alarms SET fire_at='2020-01-01T09:00:00', sent_at=NULL WHERE reminder_id=? AND kind='due'", (i,))
+    c.commit()
+    c.close()
+    run_tick()
+    c = sqlite3.connect(DB)
+    rows = c.execute("SELECT id FROM action_queue WHERE reminder_id=?", (i,)).fetchall()
+    c.close()
+    RESULTS.append((g, "la scadenza accoda l'azione", len(rows) == 1, f"righe={len(rows)}"))
+    qid = rows[0][0] if rows else 0
+
+    # La coda sopravvive al completamento del promemoria (rebuild degli allarmi).
+    sh("done", i)
+    c = sqlite3.connect(DB)
+    n = c.execute("SELECT COUNT(*) FROM action_queue WHERE id=?", (qid,)).fetchone()[0]
+    c.close()
+    RESULTS.append((g, "l'azione sopravvive al completamento", n == 1, f"righe={n}"))
+
+    # Il gate cambia quando c'e' qualcosa, ed e' deterministico.
+    g1 = subprocess.run([sys.executable, "rem.py", "actions", "gate"], cwd=SCRIPTS,
+                        capture_output=True, text=True).stdout
+    g2 = subprocess.run([sys.executable, "rem.py", "actions", "gate"], cwd=SCRIPTS,
+                        capture_output=True, text=True).stdout
+    RESULTS.append((g, "gate non vuoto con un'azione", g1.strip() != "", repr(g1[:60])))
+    RESULTS.append((g, "gate deterministico fra due letture", g1 == g2, repr(g1[:60])))
+
+    # L'agente deposita il risultato; il tick lo consegna una volta sola.
+    sh("actions", "done", str(qid), "--result", "Esito di prova")
+    out = run_tick("--dry-run")
+    RESULTS.append((g, "il tick mostra il risultato", "Esito di prova" in out, out[:120]))
+    run_tick()
+    c = sqlite3.connect(DB)
+    d1 = c.execute("SELECT delivered_at FROM action_queue WHERE id=?", (qid,)).fetchone()[0]
+    res = c.execute("SELECT result FROM action_queue WHERE id=?", (qid,)).fetchone()[0]
+    c.close()
+    RESULTS.append((g, "consegna marcata", bool(d1), str(d1)))
+    RESULTS.append((g, "il risultato resta agli atti", res == "Esito di prova", str(res)))
+    out2 = run_tick("--dry-run")
+    RESULTS.append((g, "non si consegna due volte", "Esito di prova" not in out2, out2[:100]))
+
+    # Fallimento e ritentativo.
+    add("Azione che fallisce", "--due", "2026-01-02 09:00", "--action", "Non fattibile", group=g)
+    j = CTX["id"]["Azione che fallisce"]
+    c = sqlite3.connect(DB)
+    c.execute("UPDATE alarms SET fire_at='2020-01-02T09:00:00', sent_at=NULL WHERE reminder_id=? AND kind='due'", (j,))
+    c.commit()
+    c.close()
+    run_tick()
+    c = sqlite3.connect(DB)
+    row2 = c.execute("SELECT id FROM action_queue WHERE reminder_id=?", (j,)).fetchone()
+    c.close()
+    RESULTS.append((g, "seconda azione accodata", row2 is not None, str(row2)))
+    q2 = row2[0] if row2 else 0
+    sh("actions", "fail", str(q2), "motivo di prova")
+    c = sqlite3.connect(DB)
+    err = c.execute("SELECT error FROM action_queue WHERE id=?", (q2,)).fetchone()[0]
+    c.close()
+    RESULTS.append((g, "il fallimento registra il motivo", err == "motivo di prova", str(err)))
+    sh("actions", "retry", str(q2))
+    c = sqlite3.connect(DB)
+    att = c.execute("SELECT attempted_at FROM action_queue WHERE id=?", (q2,)).fetchone()[0]
+    c.close()
+    RESULTS.append((g, "retry riapre l'azione", att is None, str(att)))
+
 def test_i18n():
     g = "O · i18n"
     out_en = sh("week")[1]
@@ -472,7 +570,8 @@ def main():
     setup()
     for fn in (test_setup, test_lists, test_sections, test_fields, test_dates, test_alarms,
                test_recurrence, test_views, test_smart, test_templates, test_estimates,
-               test_subtasks, test_grocery, test_delivery, test_i18n, test_maint):
+               test_subtasks, test_grocery, test_delivery, test_i18n, test_maint,
+               test_actions):
         try:
             fn()
         except Exception as e:

@@ -1,7 +1,7 @@
 ---
 name: reminders
-description: "Use when the user asks for a reminder (\"remind me to...\", \"what's due today?\") or wants a task system. A replica of Apple Reminders inside the agent: lists, sections, tags, priorities, urgent, early reminders, multiple alarms, patterned recurrences, smart lists, templates, grocery lists — delivered on schedule to any chat platform."
-version: 3.0.0
+description: "Use when the user asks for a reminder (\"remind me to...\", \"what's due today?\") or wants a task system. A replica of Apple Reminders inside the agent: lists, sections, tags, priorities, urgent, early reminders, multiple alarms, patterned recurrences, smart lists, templates, grocery lists, and time estimates — \"I have 30 minutes, what fits?\" — delivered on schedule to any chat platform."
+version: 3.1.0
 license: MIT
 platforms: [macos, linux]
 metadata:
@@ -41,6 +41,7 @@ Every example below uses `python3 "$S/rem.py" …`.
 python3 "$S/setup.py"                                # database + cron wrapper (idempotent)
 python3 "$S/setup.py" --register --deliver telegram  # also register the cron job
 python3 "$S/setup.py" --check                         # diagnostics: what is missing
+python3 "$S/selftest.py"                              # exercise every feature (temp profile)
 ```
 
 `setup.py` detects the profile hosting the skill by itself and creates:
@@ -50,6 +51,12 @@ python3 "$S/setup.py" --check                         # diagnostics: what is mis
    scripts inside the profile's `scripts/` directory);
 3. the cron job, every minute, `no_agent`, which runs the wrapper and delivers
    its output to the chat.
+
+`selftest.py` installs a throwaway copy into a temporary profile and runs ~190
+checks across every feature: lists, sections, alarms, recurrences, views, smart
+lists, templates, estimates, grocery categories, delivery, both languages. It
+never touches real data, and exits non-zero if anything fails — run it after
+changing the scripts.
 
 ### The cron job
 
@@ -114,6 +121,8 @@ lists — you create your own lists with `lists add`. A reminder may also have
 - **Alarms** — multiple per reminder: early + due + extras
 - **Recurrence** — hourly/daily/weekly/monthly/yearly, with patterns, intervals, an end date, and "from completion"
 - **Location** — a place metadata field (arriving/leaving): no real geofencing
+- **Estimate** — optional time-to-complete, and `fits` to see what you can
+  finish in a given slot (this one goes *beyond* Apple, which has no such field)
 
 ### Views
 
@@ -137,6 +146,7 @@ rem.py add "Report" --due 2026-10-01 --repeat monthly:last:fri --repeat-until 20
 rem.py add "Standup" --due "monday 9:30" --repeat weekly:mon,wed
 rem.py add "Check" --due "tomorrow 8:00" --repeat daily:3 --repeat-from completion
 rem.py add "Task" --due "today 18:00" --alarm 3h --alarm 17:30 --urgent --priority high
+rem.py add "Review contract" --list Work --est 45m --priority high
 rem.py add "Shopping" --notes "..." --url "https://..." --attach ~/file.pdf --tags "home,shopping"
 rem.py add "Prepare review" --section "To do" --list Work
 
@@ -147,10 +157,12 @@ rem.py columns Work         # kanban by section
 rem.py tag work | tags
 rem.py search keyword
 rem.py show 12              # details, including alarms and subtasks
+rem.py fits 30m             # what I can finish in the next half hour
+rem.py fits 1h --pack       # a subset that adds up to within the hour
 
 # change
 rem.py done 12              # complete (or reopen); recurring ones roll forward
-rem.py edit 12 --due "friday 10:00" --priority high --early 1h --urgent
+rem.py edit 12 --due "friday 10:00" --priority high --early 1h --urgent --est 20m
 rem.py snooze 12 +15m
 rem.py alarms 12            # list
 rem.py alarms 12 add 1d --label "a day before"
@@ -207,6 +219,41 @@ of from the due date.
 - `--no-alarm` for no notification at all
 - `show <id>` / `alarms <id>` list every alarm with its exact fire time
 - `alarms <id> add <when> [--label …]` adds an alarm later; `alarms <id> rm <alarm_id>` removes one
+
+## Estimates and time boxing
+
+Beyond Apple Reminders: an optional **estimate** of how long a task takes, plus
+the command that answers *"I've got 30 minutes — what can I close?"*.
+
+```bash
+rem.py add "Review contract" --est 45m
+rem.py edit 12 --est 1h30          # 45m · 2h · 1h30 · 1.5h · 90 — "none" clears it
+rem.py fits 30m                    # everything that fits, best first
+rem.py fits 1h --pack              # a subset whose estimates add up to within the hour
+rem.py fits 30m --count 3          # at most three
+rem.py fits 30m --include-unknown  # also show items with no estimate
+```
+
+**The order is the whole point** — a plain `<= 30m` filter returns junk:
+overdue → due today → priority → **largest that still fits**. That last rule
+fills the slot instead of handing back five trivial items.
+
+**Rollup**: a parent with no estimate of its own inherits the **sum of its
+subtasks**. Three 30m subtasks under "Moving house" give the parent `[1h30]`
+automatically.
+
+**Totals**: any view containing estimates ends with a summary line, so the
+field doubles as a planning tool:
+
+```
+All (6)
+  · #2 Review contract !!! [45m] [yesterday]  @Work
+  ...
+  5 with an estimate (~3h15) · 1 without
+```
+
+Items with no estimate are left out of `fits` — you can't time-box what you
+haven't sized — and counted separately in the totals line.
 
 ## Delivery and nagging
 

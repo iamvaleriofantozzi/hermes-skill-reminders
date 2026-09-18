@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS reminders (
   priority INTEGER DEFAULT 0,
   flagged INTEGER DEFAULT 0,
   urgent INTEGER DEFAULT 0,
+  estimate_minutes INTEGER,
   completed_at TEXT,
   repeat_rule TEXT,
   early_minutes INTEGER,
@@ -207,7 +208,6 @@ CREATE TABLE IF NOT EXISTS alarms (
   created_at TEXT,
   UNIQUE(reminder_id, fire_at, kind)
 );
-CREATE INDEX IF NOT EXISTS idx_alarms_fire ON alarms(fire_at, sent_at);
 
 CREATE TABLE IF NOT EXISTS templates (
   id INTEGER PRIMARY KEY,
@@ -219,7 +219,14 @@ CREATE TABLE IF NOT EXISTS templates (
 CREATE VIRTUAL TABLE IF NOT EXISTS reminders_fts USING fts5(
   title, notes, tags, content='reminders', content_rowid='id'
 );
-""" + REM_INDEXES_SQL + REM_TRIGGERS_SQL
+"""
+
+# Indici: creati DOPO la migrazione. Un indice su una colonna che deve ancora
+# essere aggiunta fallisce subito (a differenza di un trigger), e bloccherebbe
+# il DB prima che _migrate() possa intervenire.
+SCHEMA_INDEXES = REM_INDEXES_SQL + """
+CREATE INDEX IF NOT EXISTS idx_alarms_fire ON alarms(fire_at, sent_at);
+"""
 
 # Nessun elenco viene creato automaticamente. Come in Apple Reminders, le viste
 # integrate (Oggi, Programmato, Tutti, Flaggati, Urgenti, Anytime, Completati)
@@ -253,6 +260,8 @@ def connect(path: str = DB_PATH) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    conn.executescript(SCHEMA_INDEXES)
+    conn.executescript(REM_TRIGGERS_SQL)
     for k, v in DEFAULTS.items():
         conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?,?)", (k, v))
     # Nessun elenco pre-creato: al massimo si marca il primo come predefinito.
@@ -266,13 +275,13 @@ def connect(path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Aggiunge colonne mancanti e converte le ricorrenze della v1 in JSON."""
+    """Aggiunge le colonne mancanti (upgrade da una versione precedente)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(reminders)")}
     for name, decl in {
         "section_id": "INTEGER", "urgent": "INTEGER DEFAULT 0", "attachments": "TEXT",
         "location_name": "TEXT", "location_trigger": "TEXT", "location_radius": "INTEGER",
         "sort_order": "INTEGER DEFAULT 0", "nag_at": "TEXT", "early_minutes": "INTEGER",
-        "notify_count": "INTEGER DEFAULT 0",
+        "notify_count": "INTEGER DEFAULT 0", "estimate_minutes": "INTEGER",
     }.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE reminders ADD COLUMN {name} {decl}")
@@ -283,53 +292,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        "is_default": "INTEGER DEFAULT 0"}.items():
         if name not in lcols:
             conn.execute(f"ALTER TABLE lists ADD COLUMN {name} {decl}")
-    # Un promemoria puo' non avere elenco: i database creati prima avevano
-    # list_id NOT NULL e vanno ricostruiti (SQLite non lo toglie con ALTER).
-    info = conn.execute("PRAGMA table_info(reminders)").fetchall()
-    lid = next((c for c in info if c["name"] == "list_id"), None)
-    if lid is not None and lid["notnull"]:
-        _relax_list_id(conn)
-
-    # v1: repeat_rule era 'daily'|'weekly'|… con repeat_every separato.
-    # Su un database nuovo queste colonne non esistono: la migrazione gira solo
-    # se il database arriva davvero dalla v1.
-    if "repeat_every" in cols and "repeat_rule" in cols:
-        old = conn.execute("SELECT id, repeat_rule FROM reminders "
-                           "WHERE repeat_rule IS NOT NULL AND repeat_rule NOT LIKE '{%'").fetchall()
-        for r in old:
-            rule = {"freq": r["repeat_rule"], "interval": 1}
-            conn.execute("UPDATE reminders SET repeat_rule=? WHERE id=?", (json.dumps(rule), r["id"]))
-
-
-def _relax_list_id(conn: sqlite3.Connection) -> None:
-    """Ricostruisce `reminders` rendendo list_id nullable, preservando i dati."""
-    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='reminders'").fetchone()
-    if not row or not row["sql"]:
-        return
-    new_sql = row["sql"].replace("list_id INTEGER NOT NULL REFERENCES lists(id)",
-                                 "list_id INTEGER REFERENCES lists(id)")
-    if new_sql == row["sql"]:
-        return
-    cols = ", ".join(c["name"] for c in conn.execute("PRAGMA table_info(reminders)"))
-    conn.execute("PRAGMA foreign_keys=OFF")
-    # Senza legacy_alter_table SQLite riscrive i riferimenti esterni alla tabella
-    # rinominata (le FK di `alarms` finirebbero sul nome temporaneo).
-    conn.execute("PRAGMA legacy_alter_table=ON")
-    conn.execute("ALTER TABLE reminders RENAME TO reminders_pre_nullable")
-    conn.execute(new_sql)
-    conn.execute(f"INSERT INTO reminders ({cols}) SELECT {cols} FROM reminders_pre_nullable")
-    conn.execute("DROP TABLE reminders_pre_nullable")
-    conn.execute("PRAGMA legacy_alter_table=OFF")
-    # executescript esegue un commit implicito: senza questo la ricostruzione
-    # resterebbe a metà transazione e il DB si corrompe.
-    conn.commit()
-    conn.executescript(REM_INDEXES_SQL)
-    conn.executescript(REM_TRIGGERS_SQL)
-    conn.commit()
-    # L'indice FTS a contenuto esterno va riallineato alla tabella ricostruita.
-    conn.execute("INSERT INTO reminders_fts(reminders_fts) VALUES('rebuild')")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.commit()
 
 
 def get_setting(conn, key: str, default: str | None = None) -> str:
@@ -446,6 +408,51 @@ def parse_offset(text: str) -> int | None:
         return None
     n, unit = int(m.group(1)), m.group(2)
     return n * {"m": 1, "h": 60, "d": 1440, "w": 10080, "M": 43200}[unit]
+
+
+def parse_estimate(text: str | None) -> int | None:
+    """Stima di durata → minuti. Forme: '45m', '2h', '1h30', '1h30m', '1.5h', '90'."""
+    if not text:
+        return None
+    t = text.strip().lower().replace(" ", "")
+    if t.isdigit():
+        return int(t)
+    m = re.match(r"^(?:(\d+(?:[.,]\d+)?)h)?(?:(\d+)m?)?$", t)
+    if m and (m.group(1) or m.group(2)):
+        hours = float(m.group(1).replace(",", ".")) if m.group(1) else 0.0
+        mins = int(m.group(2)) if m.group(2) else 0
+        total = int(round(hours * 60)) + mins
+        return total if total > 0 else None
+    return None
+
+
+def fmt_estimate(minutes: int | None) -> str:
+    """150 → '2h30' · 45 → '45m' · 120 → '2h'."""
+    if not minutes:
+        return ""
+    h, m = divmod(int(minutes), 60)
+    if h and m:
+        return f"{h}h{m:02d}"
+    if h:
+        return f"{h}h"
+    return f"{m}m"
+
+
+def row_get(row, key: str, default=None):
+    """Valore da una sqlite3.Row, con default se la colonna non c'è nella query."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
+def effective_estimate(rem) -> int | None:
+    """Stima del promemoria: la sua, altrimenti la somma dei sottopromemoria."""
+    own = row_get(rem, "estimate_minutes")
+    if own:
+        return int(own)
+    rollup = row_get(rem, "est_effective")
+    return int(rollup) if rollup else None
 
 
 def parse_alarm(text: str, due_at: str | None, base: datetime | None = None) -> str | None:
@@ -733,6 +740,8 @@ def human(conn, rem, ref: datetime | None = None) -> str:
     pri = {1: " !!!", 5: " !!", 9: " !"}.get(rem["priority"] or 0, "")
     flag = " ⚑" if rem["flagged"] else ""
     urg = " " + tl(conn, "flag_urgent") if rem["urgent"] else ""
+    est_min = effective_estimate(rem)
+    est = f" [{fmt_estimate(est_min)}]" if est_min else ""
     when = ""
     if rem["due_at"]:
         d = from_iso(rem["due_at"])
@@ -752,7 +761,7 @@ def human(conn, rem, ref: datetime | None = None) -> str:
     loc = f" @{rem['location_name']}" if rem["location_name"] else ""
     tags = rem["tags"] if "tags" in rem.keys() else None
     tg = " " + " ".join(f"#{t.strip()}" for t in tags.split(",") if t.strip()) if tags else ""
-    return f"{mark} #{rem['id']} {rem['title']}{pri}{flag}{urg}{when}{late}{rep}{loc}{tg}"
+    return f"{mark} #{rem['id']} {rem['title']}{pri}{flag}{urg}{est}{when}{late}{rep}{loc}{tg}"
 
 
 def tags_of(rem) -> list[str]:

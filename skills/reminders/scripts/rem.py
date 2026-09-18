@@ -58,11 +58,25 @@ def resolve_list_id(conn, name: str | None) -> int | None:
 
 
 def fetch(conn, where: str, params: tuple = (), order: str = "r.due_at IS NULL, r.due_at"):
-    sql = (f"SELECT r.*, l.name AS list_name, s.name AS section_name FROM reminders r "
+    sql = (f"SELECT r.*, l.name AS list_name, s.name AS section_name, "
+           f"(SELECT SUM(c.estimate_minutes) FROM reminders c "
+           f" WHERE c.parent_id = r.id AND c.estimate_minutes IS NOT NULL) AS est_effective "
+           f"FROM reminders r "
            f"LEFT JOIN lists l ON l.id = r.list_id "
            f"LEFT JOIN sections s ON s.id = r.section_id "
            f"WHERE {where} ORDER BY {order}")
     return conn.execute(sql, params).fetchall()
+
+
+def totals_line(conn, rows) -> str:
+    """Riga di riepilogo delle stime: '4 con stima (~2h15) · 3 senza'."""
+    timed = [r for r in rows if rs.effective_estimate(r)]
+    if not timed:
+        return ""
+    total = sum(int(rs.effective_estimate(r) or 0) for r in timed)
+    missing = len(rows) - len(timed)
+    key = "totals_some" if missing else "totals_all"
+    return L(conn, key, n=len(timed), total=rs.fmt_estimate(total), m=missing)
 
 
 def emit(conn, rows, title, args):
@@ -81,6 +95,9 @@ def emit(conn, rows, title, args):
         if r["parent_id"]:
             line = "    \u21b3 " + line[2:]
         print("  " + line)
+    totals = totals_line(conn, rows)
+    if totals:
+        print("  " + totals)
 
 
 def vtitle(conn, key: str) -> str:
@@ -113,6 +130,16 @@ def show_one(conn, rem_id: int, as_json: bool = False) -> None:
         m = int(row["early_minutes"])
         lab = f"{m}m" if m < 60 else (f"{m // 60}h" if m < 1440 else f"{m // 1440}d")
         print(f"  {L(conn, 'detail_early') + ':':<12}{L(conn, 'detail_before', value=lab)}")
+    est_min = rs.row_get(row, "estimate_minutes")
+    if est_min:
+        print(f"  {L(conn, 'detail_estimate') + ':':<12}{rs.fmt_estimate(est_min)}")
+    else:
+        subs = conn.execute("SELECT estimate_minutes FROM reminders WHERE parent_id=? "
+                            "AND estimate_minutes IS NOT NULL", (rem_id,)).fetchall()
+        if subs:
+            tot = sum(int(s["estimate_minutes"]) for s in subs)
+            print(f"  {L(conn, 'detail_estimate') + ':':<12}{rs.fmt_estimate(tot)}"
+                  f"  ({len(subs)} \u00d7 {L(conn, 'detail_subtasks').lower()})")
     al = rs.alarms_of(conn, rem_id)
     if al:
         print(f"  {L(conn, 'detail_alarms') + ':'}")
@@ -298,22 +325,30 @@ def cmd_add(conn, args):
                 due, has_time = d0, False
                 due_at = rs.iso(d0)
     ts = rs.iso(rs.now())
+    est_min = None
+    if args.est:
+        est_min = rs.parse_estimate(args.est)
+        if est_min is None:
+            print(L(conn, "bad_duration", value=args.est))
+            return
     cur = conn.execute(
         """INSERT INTO reminders(list_id, section_id, title, notes, url, attachments, due_at, due_has_time,
-                                 early_minutes, priority, flagged, urgent, repeat_rule, tags, parent_id,
-                                 location_name, location_trigger, location_radius, sort_order,
-                                 created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                 early_minutes, priority, flagged, urgent, estimate_minutes, repeat_rule,
+                                 tags, parent_id, location_name, location_trigger, location_radius,
+                                 sort_order, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (list_id, section_id, args.title, args.notes, args.url, args.attach, due_at,
          1 if has_time else 0, early, rs.PRIORITY.get(args.priority, 0), 1 if args.flag else 0,
-         1 if args.urgent else 0, json.dumps(rule) if rule else None, args.tags, args.parent,
+         1 if args.urgent else 0, est_min, json.dumps(rule) if rule else None, args.tags, args.parent,
          args.location, args.location_trigger, args.location_radius, 0, ts, ts))
     rem_id = cur.lastrowid
     if not args.no_alarm:
         for extra in (args.alarm or []):
             if rs.add_alarm(conn, rem_id, extra, "nudge", due_at) is None:
                 print("  " + L(conn, "bad_alarm", value=extra))
-    rs.rebuild_alarms(conn, rem_id)
+        # Dentro il guard: rebuild_alarms() rigenera l'allarme di scadenza, quindi
+        # chiamarla con --no-alarm annullava l'opzione.
+        rs.rebuild_alarms(conn, rem_id)
     conn.commit()
     show_one(conn, rem_id, getattr(args, "json", False))
 
@@ -514,6 +549,15 @@ def cmd_edit(conn, args):
             put("early_minutes", m)
     if args.priority:
         put("priority", rs.PRIORITY.get(args.priority, 0))
+    if args.est is not None:
+        if args.est.lower() in ("none", "no", ""):
+            put("estimate_minutes", None)
+        else:
+            e = rs.parse_estimate(args.est)
+            if e is None:
+                print(L(conn, "bad_duration", value=args.est))
+                return
+            put("estimate_minutes", e)
     if args.flag is not None:
         put("flagged", 1 if args.flag else 0)
     if args.urgent is not None:
@@ -764,6 +808,71 @@ def cmd_settings(conn, args):
         print(f"  {r['key']:<22} {r['value']}")
 
 
+def cmd_fits(conn, args):
+    """Cosa chiudo in N minuti: il comando che rende utile la stima."""
+    window = rs.parse_estimate(args.window) or rs.parse_offset(args.window.lstrip("+"))
+    if not window:
+        print(L(conn, "bad_duration", value=args.window))
+        return
+    ref = rs.now()
+    today_end = rs.iso(ref.replace(hour=0, minute=0, second=0) + timedelta(days=1))
+    rows = fetch(conn, "r.completed_at IS NULL AND r.parent_id IS NULL")
+
+    cands: list[tuple] = []
+    for r in rows:
+        est = rs.effective_estimate(r)
+        if est is None:
+            if args.include_unknown:
+                cands.append((r, None))
+            continue
+        if est <= window:
+            cands.append((r, est))
+
+    def sort_key(item):
+        r, est = item
+        overdue = 0 if (r["due_at"] and rs.from_iso(r["due_at"]) < ref) else 1
+        today = 0 if (r["due_at"] and r["due_at"] < today_end) else 1
+        prio = r["priority"] or 0
+        prio = 10 if prio == 0 else prio          # senza priorità in fondo
+        return (overdue, today, prio, -(est or 0))  # il più grande che ci sta
+
+    cands.sort(key=sort_key)
+    if args.count:
+        cands = cands[:args.count]
+
+    packed = False
+    if args.pack:
+        picked, used = [], 0
+        for r, est in cands:
+            if est is not None and used + est <= window:
+                picked.append((r, est))
+                used += est
+        cands, packed = picked, True
+
+    when = rs.fmt_estimate(window)
+    if getattr(args, "json", False):
+        print(json.dumps([dict(r) for r, _ in cands], ensure_ascii=False, indent=2))
+        return
+    if not cands:
+        print(L(conn, "fits_none", when=when))
+        return
+    title = L(conn, "fits_title", when=when)
+    print(f"{title} ({len(cands)})")
+    total = 0
+    for r, est in cands:
+        line = rs.human(conn, r, ref)
+        if r["list_name"]:
+            line += f"  @{r['list_name']}"
+        print("  " + line)
+        total += est or 0
+    if total:
+        key = "totals_all" if not args.include_unknown else "totals_some"
+        print("  " + L(conn, key, n=len(cands), total=rs.fmt_estimate(total),
+                       m=sum(1 for _, e in cands if e is None)))
+    if packed:
+        print("  " + L(conn, "fits_packed", when=when))
+
+
 def cmd_stats(conn, args):
     ref = rs.now()
 
@@ -840,6 +949,7 @@ def main() -> int:
     pa.add_argument("--list")
     pa.add_argument("--due")
     pa.add_argument("--early", help="advance warning: 30m, 2h, 1d, 1w")
+    pa.add_argument("--est", help="estimated time to complete: 45m, 2h, 1h30")
     pa.add_argument("--alarm", action="append", help="extra alarm (repeatable): 2h, 1d, 18:00")
     pa.add_argument("--no-alarm", action="store_true")
     pa.add_argument("--priority", choices=list(rs.PRIORITY), default="none")
@@ -874,6 +984,15 @@ def main() -> int:
     pcol.add_argument("name")
     pcol.set_defaults(func=cmd_columns)
 
+    pf = sub.add_parser("fits", help="what fits in a given amount of time")
+    pf.add_argument("window", help="available time: 30m, 1h, 1h30")
+    pf.add_argument("--count", type=int, help="at most N reminders")
+    pf.add_argument("--pack", action="store_true",
+                    help="pick a subset whose estimates sum to within the window")
+    pf.add_argument("--include-unknown", action="store_true",
+                    help="also list reminders with no estimate")
+    pf.set_defaults(func=cmd_fits)
+
     pt = sub.add_parser("tag", help="reminders carrying a tag")
     pt.add_argument("tag")
     pt.set_defaults(func=cmd_tag)
@@ -902,6 +1021,7 @@ def main() -> int:
     pe.add_argument("--due")
     pe.add_argument("--no-due", action="store_true")
     pe.add_argument("--early")
+    pe.add_argument("--est", help="estimated time to complete: 45m, 2h, 1h30, none")
     pe.add_argument("--priority", choices=list(rs.PRIORITY))
     pe.add_argument("--flag", dest="flag", action="store_true", default=None)
     pe.add_argument("--no-flag", dest="flag", action="store_false")

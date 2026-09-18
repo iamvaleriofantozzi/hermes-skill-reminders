@@ -54,6 +54,17 @@ Set them and walk away. Your chat pings you when it matters. 💬
 - 🪆 **Subtasks** — finish the parent, the children close themselves
 - 📍 Location metadata (arriving / leaving)
 
+### ⏳ Estimates — the bit Apple doesn't have
+- ⏱️ **`--est 45m`** — how long the task actually takes. Optional, never nags you
+- 🎯 **`rem.py fits 30m`** — *"I've got half an hour, what can I close?"*
+- 🧩 **`--pack`** — picks a subset that adds up to *within* the slot
+- 🪆 **Rolls up from subtasks** — three 30m children make the parent `[1h30]`
+- ➗ **Totals in every view** — `5 with an estimate (~3h15) · 1 without`
+
+Ordered **overdue → due today → priority → largest that still fits**, because a
+plain "shorter than 30 minutes" filter hands you five trivial items and calls it
+progress.
+
 ### ⏱️ Timing
 - Due with a time, or **all-day** (pings at an hour you choose)
 - ⏳ **Early reminder** — an advance nudge, from 5 minutes to a month before
@@ -104,21 +115,42 @@ run it twice, nothing breaks. 🙌
 ## 💬 What it looks like
 
 ```console
-$ rem.py add "Send the report" --list Work --due "tuesday 15:00" --early 2h --urgent
-#10  Send the report
+$ rem.py add "Send the report" --list Work --due "tuesday 15:00" --early 2h --est 2h --urgent
+#11  Send the report
   list:       Work
   status:     open
   due:        22/09/2026 15:00  (timed)
   early:      2h before
+  estimate:   2h
   alarms:
     · 22/09/2026 13:00  early
     · 22/09/2026 15:00  due
   priority:   none  [URGENT]
 
 $ rem.py week
-This week (Mon–Sun) (2)
-  · #9 Buy milk [today 18:30] OVERDUE  @Groceries
-  · #8 Call Marco [tomorrow 10:00]  @Work
+This week (Mon–Sun) (3)
+  · #10 Review contract !!! [45m] [yesterday]  @Work
+  · #6 Buy milk [10m] [today 18:30] OVERDUE  @Groceries
+  · #7 Call Marco [15m] [tomorrow 10:00]  @Work
+  3 with an estimate (~1h10)
+
+$ rem.py fits 30m
+Fits in 30m (4)
+  · #6 Buy milk [10m] [today 18:30] OVERDUE  @Groceries
+  · #9 Update the slides !! [25m]  @Work
+  · #7 Call Marco [15m] [tomorrow 10:00]  @Work
+  · #8 Reply to Anna [5m]  @Work
+  4 with an estimate (~55m)
+
+$ rem.py fits 2h --pack
+Fits in 2h (5)
+  · #10 Review contract !!! [45m] [yesterday]  @Work
+  · #6 Buy milk [10m] [today 18:30] OVERDUE  @Groceries
+  · #9 Update the slides !! [25m]  @Work
+  · #7 Call Marco [15m] [tomorrow 10:00]  @Work
+  · #8 Reply to Anna [5m]  @Work
+  5 with an estimate (~1h40)
+  selected for a 2h slot
 
 $ rem.py list Groceries
 Groceries — groceries (6)
@@ -126,7 +158,7 @@ Groceries — groceries (6)
     · #1 apples
     · #2 lemons
   Dairy & eggs
-    · #9 Buy milk [today 18:30] OVERDUE
+    · #6 Buy milk [10m] [today 18:30] OVERDUE
     · #3 milk
   Bread & grains
     · #4 bread
@@ -182,6 +214,7 @@ nothing to say. Empty output = no message sent. 🤫
 rem.py add "Call Marco" --list Work --due "tomorrow 9:00" --early 30m
 rem.py add "Report" --due 2026-10-01 --repeat monthly:last:fri --repeat-until 2027-12-31
 rem.py today | week | scheduled | urgent | overdue
+rem.py fits 30m | fits 1h --pack          # what closes in the time I have
 rem.py done 12 | snooze 12 +15m | edit 12 --due "friday 10:00"
 rem.py lists add "Travel" --icon airplane | smart "Urgent" --urgent
 rem.py alarms 12 add 1d --label "a day before"
@@ -192,6 +225,15 @@ Add `--json` to any command for programmatic use. The full reference — date
 formats, recurrence syntax, operating rules — is in
 **[`skills/reminders/SKILL.md`](skills/reminders/SKILL.md)** 📖
 
+Want to check your install actually works? 🧪
+
+```bash
+python3 skills/reminders/scripts/selftest.py
+```
+
+Runs ~190 checks over every feature on a throwaway profile — your data is never
+touched — and exits non-zero if anything is off.
+
 ---
 
 ## 🚫 What it deliberately doesn't do
@@ -200,6 +242,10 @@ formats, recurrence syntax, operating rules — is in
 - No sharing lists with other people
 - No sync with Apple Reminders or any third-party task app
 - No real geofencing for locations — the place is metadata, not a trigger
+- **No time tracking.** You can say a task takes 45 minutes, but nothing watches
+  the clock while you do it — so there's no "your estimates run 40% short" report.
+  Deliberate: measuring real time needs a start event, and half-built timekeeping
+  is worse than none. 🔭
 
 This is the *agent's own* reminder system, standing on its own two feet. 🦶
 

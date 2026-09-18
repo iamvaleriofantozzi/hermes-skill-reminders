@@ -101,6 +101,17 @@ No UI, no sharing with other people, no sync with Apple Reminders or any externa
 task app, and no real geofencing for location reminders (location is metadata).
 This is the agent's own reminder system.
 
+## Author
+
+**Valerio Fantozzi** — built this because agents forget, and reminders shouldn't.
+
+- Email: <iamvaleriofantozzi@gmail.com>
+- LinkedIn: [valeriofantozzi](https://www.linkedin.com/in/valeriofantozzi/)
+- GitHub: [@iamvaleriofantozzi](https://github.com/iamvaleriofantozzi)
+
+Questions, issues and pull requests are welcome. If this skill is useful to you,
+a star helps others find it.
+
 ## License
 
 MIT

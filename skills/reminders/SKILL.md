@@ -217,6 +217,11 @@ Completing a recurring reminder does not archive it: the due date rolls forward
 to the next occurrence and it stays open. A limited series stops when the count
 runs out and the reminder closes for good.
 
+If the next occurrence would already be in the past — the agent was off for a
+while, or you just completed it late — the advance **skips forward to the first
+future occurrence**. You never have to close the same weekly reminder four times
+to work through the weeks you missed.
+
 ```bash
 rem.py add "Standup" --due "monday 9:00" --repeat weekly:mon              # forever
 rem.py add "Report"  --due "tuesday 10:00" --repeat weekly:tue --repeat-count 5

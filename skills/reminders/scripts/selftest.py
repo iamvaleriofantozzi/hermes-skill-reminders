@@ -238,6 +238,27 @@ def test_recurrence():
     out = t(g, "illimitata: contatore rimosso", ["show", k])
     RESULTS.append((g, "contatore rimosso con --repeat-count 0", "of 3" not in out, out[:100]))
 
+    # Una ricorrenza rimasta ferma a lungo non deve far smaltire a mano tutte le
+    # occorrenze perse: si riparte dalla prossima futura.
+    import datetime as _dt
+    add("Ferma da settimane", "--due", "2026-08-24 09:00", "--repeat", "weekly:mon", group=g)
+    i = CTX["id"]["Ferma da settimane"]
+    sh("done", i)
+    nxt = _due_of(i)
+    RESULTS.append((g, "in ritardo: riparte dalla prossima occorrenza futura",
+                    bool(nxt) and _dt.datetime.fromisoformat(nxt) > _dt.datetime.now(),
+                    f"→ {nxt}"))
+
+    # Chiudere in anticipo non deve far saltare un giro.
+    add("In anticipo", "--due", "monday 9:00", "--repeat", "weekly:mon", group=g)
+    j2 = CTX["id"]["In anticipo"]
+    before = _due_of(j2)
+    sh("done", j2)
+    after = _due_of(j2)
+    delta = (_dt.datetime.fromisoformat(after) - _dt.datetime.fromisoformat(before)).days
+    RESULTS.append((g, "in anticipo: avanza di 7 giorni esatti", delta == 7,
+                    f"{before} → {after} ({delta}g)"))
+
 
 # ─── H. viste ────────────────────────────────────────────────────────────────
 def test_views():

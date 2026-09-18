@@ -621,6 +621,17 @@ def advance(conn, rem, from_dt: datetime | None = None) -> str | None:
     nxt = next_occurrence(rule, base)
     if nxt is None:
         return None
+    # Salta le occorrenze ormai passate. Se il promemoria e' rimasto fermo a
+    # lungo — agente spento, o semplicemente chiuso in ritardo — non si accumula
+    # il debito di tutte quelle mancate: si riparte dalla prossima futura,
+    # invece di costringere a chiuderle una per una.
+    ref = now()
+    for _ in range(1000):
+        if nxt is None or nxt > ref:
+            break
+        nxt = next_occurrence(rule, nxt)
+    if nxt is None:
+        return None
     end = rule.get("end_date")
     if end:
         limit = from_iso(end if "T" in str(end) else str(end) + "T23:59:59")

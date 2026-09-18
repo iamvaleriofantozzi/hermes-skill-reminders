@@ -35,6 +35,14 @@ def t(group, name, args, want=None, wantnot=None, code=0):
     return out
 
 
+def _due_of(i):
+    """Scadenza attuale di un promemoria, letta dal DB."""
+    c = sqlite3.connect(DB)
+    r = c.execute("SELECT due_at FROM reminders WHERE id=?", (i,)).fetchone()
+    c.close()
+    return r[0] if r else None
+
+
 def add(title, *extra, **kw):
     """Aggiunge un promemoria e ne memorizza l'id."""
     out = t(kw.get("group", "add"), f'add "{title}"', ["add", title, *extra])
@@ -184,6 +192,51 @@ def test_recurrence():
     add("Ric from completion", "--due", "tomorrow 8:00", "--repeat", "daily:3", "--repeat-from", "completion", group=g)
     i = CTX["id"]["Ric from completion"]
     t(g, "from completion mostrato", ["show", i], want="completion")
+
+    # Accenti: in italiano la forma corretta è accentata e deve funzionare.
+    for acc in ("lunedì 9:00", "martedì 9:00", "mercoledì 10:00", "giovedì", "venerdì"):
+        add(f"Acc {acc}", "--due", acc, group=g)
+        i = CTX["id"][f"Acc {acc}"]
+        out = t(g, f"data accentata «{acc}»", ["show", i])
+        RESULTS.append((g, f"«{acc}» riconosciuta", "due:" in out, out[:100]))
+
+    # Serie infinita: ogni lunedì, per sempre.
+    add("Sempre lunedi", "--due", "monday 9:00", "--repeat", "weekly:mon", group=g)
+    i = CTX["id"]["Sempre lunedi"]
+    d0 = _due_of(i)
+    sh("done", i)
+    d1 = _due_of(i)
+    RESULTS.append((g, "serie infinita: avanza di una settimana",
+                    bool(d0 and d1 and d0 != d1), f"{d0} → {d1}"))
+    sh("done", i)
+    d2 = _due_of(i)
+    RESULTS.append((g, "serie infinita: continua ad avanzare",
+                    bool(d1 and d2 and d1 != d2), f"{d1} → {d2}"))
+
+    # Serie a numero chiuso: ogni martedì per 5 settimane.
+    add("Cinque martedi", "--due", "tuesday 10:00", "--repeat", "weekly:tue",
+        "--repeat-count", "5", group=g)
+    j = CTX["id"]["Cinque martedi"]
+    t(g, "mostra l'occorrenza corrente", ["show", j], want="1 of 5")
+    seen, last = [], ""
+    for _ in range(5):
+        seen.append(_due_of(j))
+        last = sh("done", j)[1]
+    RESULTS.append((g, "5 occorrenze distinte, poi stop", len(set(seen)) == 5, str(seen)))
+    RESULTS.append((g, "la quinta chiusura segnala serie completata",
+                    "series complete" in last, last[:80]))
+    c = sqlite3.connect(DB)
+    done_state = c.execute("SELECT completed_at FROM reminders WHERE id=?", (j,)).fetchone()[0]
+    c.close()
+    RESULTS.append((g, "a serie finita il promemoria resta chiuso", bool(done_state), str(done_state)))
+
+    # Ritorno a serie illimitata.
+    add("Torna infinita", "--due", "wednesday 8:00", "--repeat", "weekly:wed",
+        "--repeat-count", "3", group=g)
+    k = CTX["id"]["Torna infinita"]
+    sh("edit", k, "--repeat-count", "0")
+    out = t(g, "illimitata: contatore rimosso", ["show", k])
+    RESULTS.append((g, "contatore rimosso con --repeat-count 0", "of 3" not in out, out[:100]))
 
 
 # ─── H. viste ────────────────────────────────────────────────────────────────

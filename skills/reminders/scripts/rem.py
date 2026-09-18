@@ -154,6 +154,10 @@ def show_one(conn, rem_id: int, as_json: bool = False) -> None:
             extra.append(L(conn, "detail_until", date=str(rule["end_date"])[:10]))
         if rule.get("from_completion"):
             extra.append(L(conn, "detail_from_completion"))
+        total = rs.row_get(row, "repeat_total")
+        if total:
+            extra.append(L(conn, "detail_of_total",
+                           i=rs.row_get(row, "repeat_index") or 1, n=total))
         desc = rs.describe_repeat(conn, rule)
         print(f"  {L(conn, 'detail_recurrence') + ':':<12}{desc}" + (f" ({', '.join(extra)})" if extra else ""))
     prio = L(conn, f"prio_{rs.PRIORITY_LABEL.get(row['priority'] or 0, 'none')}")
@@ -331,15 +335,27 @@ def cmd_add(conn, args):
         if est_min is None:
             print(L(conn, "bad_duration", value=args.est))
             return
+    repeat_total = None
+    if getattr(args, "repeat_count", None):
+        if not rule:
+            print(L(conn, "bad_repeat_count"))
+            return
+        if args.repeat_count < 1:
+            print(L(conn, "bad_repeat_count"))
+            return
+        repeat_total = args.repeat_count
     cur = conn.execute(
         """INSERT INTO reminders(list_id, section_id, title, notes, url, attachments, due_at, due_has_time,
                                  early_minutes, priority, flagged, urgent, estimate_minutes, repeat_rule,
+                                 repeat_total, repeat_index,
                                  tags, parent_id, location_name, location_trigger, location_radius,
                                  sort_order, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (list_id, section_id, args.title, args.notes, args.url, args.attach, due_at,
          1 if has_time else 0, early, rs.PRIORITY.get(args.priority, 0), 1 if args.flag else 0,
-         1 if args.urgent else 0, est_min, json.dumps(rule) if rule else None, args.tags, args.parent,
+         1 if args.urgent else 0, est_min, json.dumps(rule) if rule else None,
+         repeat_total, 1,
+         args.tags, args.parent,
          args.location, args.location_trigger, args.location_radius, 0, ts, ts))
     rem_id = cur.lastrowid
     if not args.no_alarm:
@@ -504,6 +520,9 @@ def cmd_done(conn, args):
         conn.execute("UPDATE reminders SET completed_at=?, nag_at=NULL WHERE id=? AND completed_at IS NULL",
                      (ts, s["id"]))
     conn.commit()
+    if row["repeat_rule"] and rs.row_get(row, "repeat_total"):
+        print(L(conn, "done_series", title=row["title"]))
+        return
     print(L(conn, "done", title=row["title"]))
 
 
@@ -558,6 +577,15 @@ def cmd_edit(conn, args):
                 print(L(conn, "bad_duration", value=args.est))
                 return
             put("estimate_minutes", e)
+    if getattr(args, "repeat_count", None) is not None:
+        if args.repeat_count == 0:
+            put("repeat_total", None)          # 0 = serie di nuovo illimitata
+            put("repeat_index", 1)
+        elif args.repeat_count < 0:
+            print(L(conn, "bad_repeat_count"))
+            return
+        else:
+            put("repeat_total", args.repeat_count)
     if args.flag is not None:
         put("flagged", 1 if args.flag else 0)
     if args.urgent is not None:
@@ -961,6 +989,8 @@ def main() -> int:
     pa.add_argument("--repeat", help="daily|weekly|monthly|yearly|hourly[:N] [pattern]")
     pa.add_argument("--repeat-until", help="end date for the recurrence")
     pa.add_argument("--repeat-from", choices=["due", "completion"], default="due")
+    pa.add_argument("--repeat-count", type=int,
+                    help="limited series: stop after N occurrences (e.g. every tuesday for 5 weeks)")
     pa.add_argument("--tags", help="comma-separated tags")
     pa.add_argument("--section")
     pa.add_argument("--parent", type=int, help="parent reminder id (subtask)")
@@ -1022,6 +1052,8 @@ def main() -> int:
     pe.add_argument("--no-due", action="store_true")
     pe.add_argument("--early")
     pe.add_argument("--est", help="estimated time to complete: 45m, 2h, 1h30, none")
+    pe.add_argument("--repeat-count", type=int,
+                    help="limit the series to N occurrences (0 = back to unlimited)")
     pe.add_argument("--priority", choices=list(rs.PRIORITY))
     pe.add_argument("--flag", dest="flag", action="store_true", default=None)
     pe.add_argument("--no-flag", dest="flag", action="store_false")

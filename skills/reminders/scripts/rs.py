@@ -19,10 +19,18 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import i18n
+
+
+def deaccent(text: str) -> str:
+    """'lunedì' → 'lunedi'. Gli accenti non devono impedire il riconoscimento:
+    la forma accentata è quella corretta in italiano e va accettata."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text)
+                   if not unicodedata.combining(c))
 
 def data_dir() -> Path:
     """Cartella dati del profilo che ospita questa skill.
@@ -187,6 +195,8 @@ CREATE TABLE IF NOT EXISTS reminders (
   estimate_minutes INTEGER,
   completed_at TEXT,
   repeat_rule TEXT,
+  repeat_total INTEGER,
+  repeat_index INTEGER DEFAULT 1,
   early_minutes INTEGER,
   location_name TEXT, location_trigger TEXT, location_radius INTEGER,
   parent_id INTEGER REFERENCES reminders(id),
@@ -282,6 +292,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "location_name": "TEXT", "location_trigger": "TEXT", "location_radius": "INTEGER",
         "sort_order": "INTEGER DEFAULT 0", "nag_at": "TEXT", "early_minutes": "INTEGER",
         "notify_count": "INTEGER DEFAULT 0", "estimate_minutes": "INTEGER",
+        "repeat_total": "INTEGER", "repeat_index": "INTEGER DEFAULT 1",
     }.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE reminders ADD COLUMN {name} {decl}")
@@ -346,7 +357,7 @@ def parse_when(text: str, base: datetime | None = None,
     if not text:
         return None, False
     base = base or now()
-    t = text.strip().lower()
+    t = deaccent(text.strip().lower())
     hh, mm = (int(x) for x in all_day_time.split(":"))
 
     m = _OFFSET_RE.match(t)
@@ -476,7 +487,7 @@ def parse_repeat(spec: str) -> dict | None:
     """
     if not spec:
         return None
-    parts = spec.strip().lower().split(":")
+    parts = deaccent(spec.strip().lower()).split(":")
     freq = parts[0]
     if freq not in ("hourly", "daily", "weekly", "monthly", "yearly"):
         return None
@@ -600,6 +611,12 @@ def advance(conn, rem, from_dt: datetime | None = None) -> str | None:
     rule = json.loads(rem["repeat_rule"]) if rem["repeat_rule"] else None
     if not rule or not rem["due_at"]:
         return None
+    # Serie a numero chiuso ("tutti i martedì per 5 settimane"): finita la
+    # dotazione di occorrenze la ricorrenza si ferma e il promemoria resta chiuso.
+    total = row_get(rem, "repeat_total")
+    idx = row_get(rem, "repeat_index") or 1
+    if total and idx >= int(total):
+        return None
     base = now() if rule.get("from_completion") else (from_dt or from_iso(rem["due_at"]))
     nxt = next_occurrence(rule, base)
     if nxt is None:
@@ -609,6 +626,7 @@ def advance(conn, rem, from_dt: datetime | None = None) -> str | None:
         limit = from_iso(end if "T" in str(end) else str(end) + "T23:59:59")
         if nxt > limit:
             return None
+    conn.execute("UPDATE reminders SET repeat_index=? WHERE id=?", (idx + 1, rem["id"]))
     return iso(nxt)
 
 

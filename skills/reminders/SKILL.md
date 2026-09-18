@@ -207,9 +207,23 @@ monthly:last:fri      monthly:second:mar (first/second/third/fourth/last)
 yearly:mar,jun        yearly:2:mar
 ```
 
-`--repeat-until 2027-12-31` ends the series.
+`--repeat-until 2027-12-31` ends the series on a date.
+`--repeat-count 5` ends it after 5 occurrences — *"every Tuesday, 5 weeks"*.
+`--repeat-count 0` (on `edit`) goes back to unlimited.
 `--repeat-from completion` restarts the count from when you complete it, instead
 of from the due date.
+
+Completing a recurring reminder does not archive it: the due date rolls forward
+to the next occurrence and it stays open. A limited series stops when the count
+runs out and the reminder closes for good.
+
+```bash
+rem.py add "Standup" --due "monday 9:00" --repeat weekly:mon              # forever
+rem.py add "Report"  --due "tuesday 10:00" --repeat weekly:tue --repeat-count 5
+```
+
+Weekday and month names are accepted **with or without accents** (`lunedì` and
+`lunedi` both work), in Italian and English.
 
 ## Early reminders and alarms
 

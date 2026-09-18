@@ -65,6 +65,16 @@ Ordered **overdue → due today → priority → largest that still fits**, beca
 plain "shorter than 30 minutes" filter hands you five trivial items and calls it
 progress.
 
+### 🔁 Repeats
+- **Forever, or a fixed number of times** — *every Monday* never ends; *every
+  Tuesday for 5 weeks* stops after five (`--repeat-count 5`)
+- Patterns: multi-day weeks (`weekly:mon,wed`), *last Friday* of the month,
+  every 2nd Tuesday, multi-month years
+- End on a date (`--repeat-until`), or count from completion instead of the due
+  date
+- Completing one doesn't archive it — the date rolls forward and it stays open
+- No accents required: `lunedì` and `lunedi` both work, IT and EN
+
 ### ⏱️ Timing
 - Due with a time, or **all-day** (pings at an hour you choose)
 - ⏳ **Early reminder** — an advance nudge, from 5 minutes to a month before
@@ -213,6 +223,8 @@ nothing to say. Empty output = no message sent. 🤫
 ```bash
 rem.py add "Call Marco" --list Work --due "tomorrow 9:00" --early 30m
 rem.py add "Report" --due 2026-10-01 --repeat monthly:last:fri --repeat-until 2027-12-31
+rem.py add "Standup" --due "monday 9:00" --repeat weekly:mon          # every monday, forever
+rem.py add "Tuesday report" --due "tuesday 10:00" --repeat weekly:tue --repeat-count 5
 rem.py today | week | scheduled | urgent | overdue
 rem.py fits 30m | fits 1h --pack          # what closes in the time I have
 rem.py done 12 | snooze 12 +15m | edit 12 --due "friday 10:00"

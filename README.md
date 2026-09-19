@@ -135,16 +135,27 @@ run it twice, nothing breaks. 🙌
 
 ## 🛡️ Approval before creation
 
-When you ask Hermes to create a reminder in chat, it **always shows a complete
-draft and asks for your explicit approval first** — even when your request already
-contains the title and date.
+The per-profile setting `require_approval` controls this gate. It is **enabled
+by default** (`1`): when you ask Hermes to create a reminder in chat, it always
+shows a complete draft and asks for your explicit approval first — even when
+your request already contains the title and date.
 
-The draft includes the title, date/time, list, alarms, recurrence, estimate,
-priority, tags, notes, URL, attachment, and any agent action. Only a separate
-confirmation such as `yes`, `confirm`, or `create it` creates that exact reminder.
-If you change anything, Hermes asks again. Ambiguous replies and silence never
-count as approval. The same gate applies to template-based reminder creation and
-autonomous actions.
+```bash
+rem.py settings get require_approval       # 1 by default
+rem.py settings set require_approval 0     # optional bypass
+rem.py settings set require_approval 1     # restore the gate
+```
+
+With the setting enabled, the draft includes the title, date/time, list, alarms,
+recurrence, estimate, priority, tags, notes, URL, attachment, and any agent
+action. Only a separate confirmation such as `yes`, `confirm`, or `create it`
+creates that exact reminder. If you change anything, Hermes asks again.
+Ambiguous replies and silence never count as approval. The same gate applies to
+template-based reminder creation and autonomous actions.
+
+With `require_approval = 0`, a complete and unambiguous request may proceed
+without the extra confirmation. Missing or ambiguous information still requires
+a question.
 
 Directly running `rem.py add ...` in a terminal remains a deliberate CLI
 operation; this gate governs agent-mediated creation.
@@ -272,7 +283,9 @@ rem.py fits 30m | fits 1h --pack          # what closes in the time I have
 rem.py done 12 | snooze 12 +15m | edit 12 --due "friday 10:00"
 rem.py lists add "Travel" --icon airplane | smart "Urgent" --urgent
 rem.py alarms 12 add 1d --label "a day before"
-rem.py settings set language it   # or back to en
+rem.py settings set require_approval 1   # approval gate, enabled by default
+rem.py settings set require_approval 0   # optional bypass
+rem.py settings set language it             # or back to en
 ```
 
 Add `--json` to any command for programmatic use. The full reference — date

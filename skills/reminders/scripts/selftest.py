@@ -68,8 +68,14 @@ def setup():
 def test_setup():
     g = "A · install"
     c = sqlite3.connect(DB)
-    rc, out = sh("settings")
-    RESULTS.append((g, "settings leggibili", rc == 0, out[:80] if rc else ""))
+    rc, out = sh("settings", "get", "require_approval")
+    RESULTS.append((g, "approval default enabled", rc == 0 and "require_approval = 1" in out, out[:120]))
+    rc, out = sh("settings", "set", "require_approval", "off")
+    RESULTS.append((g, "approval can be disabled", rc == 0 and "require_approval = 0" in out, out[:120]))
+    rc, out = sh("settings", "get", "require_approval")
+    RESULTS.append((g, "approval disabled persisted", rc == 0 and "require_approval = 0" in out, out[:120]))
+    rc, out = sh("settings", "set", "require_approval", "on")
+    RESULTS.append((g, "approval can be re-enabled", rc == 0 and "require_approval = 1" in out, out[:120]))
     cols = [r[1] for r in c.execute("PRAGMA table_info(reminders)")]
     for col in ("estimate_minutes", "urgent", "nag_at", "repeat_rule", "tags", "parent_id"):
         RESULTS.append((g, f"colonna {col}", col in cols, ""))

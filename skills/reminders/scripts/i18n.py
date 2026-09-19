@@ -124,6 +124,7 @@ EN = {
     # settings
     "settings_title": "Settings",
     "unknown_key": "unknown key: {key} (available: {keys})",
+    "invalid_setting_value": "invalid value for {key}: {value} (use 0/1 or on/off)",
     "set_ok": "{key} = {value}",
     # stats
     "stats_line1": "Reminders: {total} total · {open} open · {today} today · {overdue} overdue · {urgent} urgent · {flagged} flagged · {nodate} without a date",
@@ -320,6 +321,7 @@ IT = {
     "template_not_found": "template non trovato: {name}",
     "settings_title": "Impostazioni",
     "unknown_key": "chiave sconosciuta: {key} (disponibili: {keys})",
+    "invalid_setting_value": "valore non valido per {key}: {value} (usa 0/1 oppure on/off)",
     "set_ok": "{key} = {value}",
     "stats_line1": "Promemoria: {total} totali · {open} aperti · {today} oggi · {overdue} scaduti · {urgent} urgenti · {flagged} flaggati · {nodate} senza data",
     "stats_line2": "Archivio:   {completed} completati · {recurring} ricorrenti · {lists} elenchi · {pending} allarmi in attesa",

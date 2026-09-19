@@ -89,6 +89,7 @@ DEFAULTS = {
     "show_all_day_overdue": "0",
     "nag_minutes": "10",
     "nag_max": "6",
+    "require_approval": "1",  # agent creation gate; enabled by default
     "default_list_id": "",
 }
 
@@ -375,6 +376,14 @@ def set_setting(conn, key: str, value: str, commit: bool = True) -> None:
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     if commit:
         conn.commit()
+
+
+def setting_enabled(conn, key: str, default: bool = False) -> bool:
+    """Read a boolean setting using the accepted 0/1 and on/off forms."""
+    fallback = "1" if default else "0"
+    return str(get_setting(conn, key, fallback)).strip().lower() in {
+        "1", "true", "yes", "on", "enabled"
+    }
 
 
 def lang(conn) -> str:

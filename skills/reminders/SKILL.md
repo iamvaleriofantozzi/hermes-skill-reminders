@@ -1,7 +1,7 @@
 ---
 name: reminders
 description: "Use when the user asks for a reminder (\"remind me to...\", \"what's due today?\") or wants a task system. A replica of Apple Reminders inside the agent: lists, sections, tags, priorities, urgent, early reminders, multiple alarms, patterned recurrences, smart lists, templates, grocery lists, and time estimates — \"I have 30 minutes, what fits?\" — delivered on schedule to any chat platform."
-version: 3.2.0
+version: 3.3.0
 license: MIT
 platforms: [macos, linux]
 metadata:
@@ -139,9 +139,22 @@ Saved filtered views: `--tags --flag --urgent --priority --from-list
 
 ## Approval gate for reminder creation
 
-When the skill is used through the agent, **never create a reminder immediately
-from a natural-language request**. Always prepare a draft first and ask the user
-for an explicit approval in a separate turn.
+The per-profile setting `require_approval` controls the agent's creation gate. It
+is **enabled by default** (`1`). Read it before every agent-mediated reminder
+creation:
+
+```bash
+rem.py settings get require_approval
+# enabled (default): require_approval = 1
+# optional bypass:    rem.py settings set require_approval 0
+# restore the gate:   rem.py settings set require_approval 1
+```
+
+When the setting is `1`, **never create a reminder immediately from a
+natural-language request**. Always prepare a draft first and ask the user for
+an explicit approval in a separate turn. When it is `0`, a complete,
+unambiguous request may be created directly; ambiguous dates and missing
+information still require a question.
 
 The draft must show every creation-relevant field: title, due date/time or
 anytime, list/section, alarms or early warning, recurrence, estimate, priority,
@@ -154,7 +167,7 @@ Only an unambiguous confirmation (`yes`, `confirm`, `create it`, or equivalent)
 may authorize that exact draft. If the user changes any field, discard the old
 approval and ask again. Silence, ambiguity, or a request to "remind me" alone is
 not approval. Do not create reminders from autonomous actions without a fresh
-user approval either.
+user approval while the setting is enabled.
 
 This gate covers every agent-mediated creation path, including `rem.py add` and
 `template apply`. A user deliberately running the CLI command themselves is
@@ -389,6 +402,8 @@ rem.py actions run                   # wake the agent now
 ## Localisation
 
 ```bash
+rem.py settings set require_approval 1     # approval gate (default)
+rem.py settings set require_approval 0     # optional bypass
 rem.py settings set language it              # en (default) | it
 rem.py settings set time_format 12           # 12 | 24
 rem.py settings set all_day_notify_time 08:30
@@ -401,12 +416,12 @@ The first day of the week is **not** configurable: it is always Monday.
 
 ## Operating rules
 
-1. **Always ask for explicit approval before creating**: show the complete draft and wait for a separate confirmation. This applies even when the request already includes title and date.
+1. **Read `require_approval` before creating**. It defaults to `1`: show the complete draft and wait for a separate confirmation. With `0`, a complete unambiguous request may proceed directly; still ask about missing or ambiguous fields.
 2. **Ambiguous date → ask.** Never invent a time: a reminder at 09:00 when the user meant 18:00 is worse than no reminder.
 3. **Actionable titles**: "Send the report to Marco", not "report".
 4. **Fetch the ID from a view** before `done`/`edit`/`delete`: never guess it.
 5. **Complete only when it is actually done**, never on intent.
-6. After approval and `add`, report **what** was created and **when** it will notify.
+6. After approval (when enabled) and `add`, report **what** was created and **when** it will notify.
 7. A completed recurring reminder **is not archived**: it rolls to the next occurrence. To stop it, `edit --repeat none`.
 
 ## Pitfalls

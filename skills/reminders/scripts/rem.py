@@ -860,8 +860,18 @@ def cmd_settings(conn, args):
         if args.key not in rs.DEFAULTS:
             print(L(conn, "unknown_key", key=args.key, keys=", ".join(rs.DEFAULTS)))
             return
-        rs.set_setting(conn, args.key, args.value)
-        print(L(conn, "set_ok", key=args.key, value=args.value))
+        value = args.value
+        if args.key in {"require_approval", "show_all_day_overdue"}:
+            normalized = str(value).strip().lower()
+            if normalized in {"1", "true", "yes", "on", "enabled"}:
+                value = "1"
+            elif normalized in {"0", "false", "no", "off", "disabled"}:
+                value = "0"
+            else:
+                print(L(conn, "invalid_setting_value", key=args.key, value=value))
+                return
+        rs.set_setting(conn, args.key, value)
+        print(L(conn, "set_ok", key=args.key, value=value))
         return
     if args.action == "get":
         print(L(conn, "set_ok", key=args.key, value=rs.get_setting(conn, args.key)))

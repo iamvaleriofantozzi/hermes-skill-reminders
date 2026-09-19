@@ -133,9 +133,34 @@ run it twice, nothing breaks. 🙌
 
 ---
 
+## 🛡️ Approval before creation
+
+When you ask Hermes to create a reminder in chat, it **always shows a complete
+draft and asks for your explicit approval first** — even when your request already
+contains the title and date.
+
+The draft includes the title, date/time, list, alarms, recurrence, estimate,
+priority, tags, notes, URL, attachment, and any agent action. Only a separate
+confirmation such as `yes`, `confirm`, or `create it` creates that exact reminder.
+If you change anything, Hermes asks again. Ambiguous replies and silence never
+count as approval. The same gate applies to template-based reminder creation and
+autonomous actions.
+
+Directly running `rem.py add ...` in a terminal remains a deliberate CLI
+operation; this gate governs agent-mediated creation.
+
+---
+
 ## 💬 What it looks like
 
 ```console
+You: remind me to send the report Tuesday at 15:00
+
+Hermes: Draft reminder — Send the report · Tuesday 15:00 · Work · 2h estimate ·
+        2h early warning · urgent. Create it? [yes/no]
+
+You: yes
+
 $ rem.py add "Send the report" --list Work --due "tuesday 15:00" --early 2h --est 2h --urgent
 #11  Send the report
   list:       Work
@@ -201,6 +226,12 @@ upcoming: · #10 Send the report URGENT [tue 15:00]
 
 ```
    you ──── "remind me to…" ────►  the agent
+                                     │  draft + ask approval
+                                     ▼
+                              ┌──────────────┐
+                              │  yes / no ?  │
+                              └──────┬───────┘
+                                     │ yes
                                      │  rem.py add …
                                      ▼
                               ┌──────────────┐

@@ -1,7 +1,7 @@
 ---
 name: reminders
 description: "Use when the user asks for a reminder (\"remind me to...\", \"what's due today?\") or wants a task system. A replica of Apple Reminders inside the agent: lists, sections, tags, priorities, urgent, early reminders, multiple alarms, patterned recurrences, smart lists, templates, grocery lists, and time estimates — \"I have 30 minutes, what fits?\" — delivered on schedule to any chat platform."
-version: 3.1.0
+version: 3.2.0
 license: MIT
 platforms: [macos, linux]
 metadata:
@@ -137,10 +137,33 @@ preference: `week` and `nextweek` are Monday-aligned by construction.
 Saved filtered views: `--tags --flag --urgent --priority --from-list
 --due-within N --has-date --no-date`, combined with AND (default) or `--any`.
 
+## Approval gate for reminder creation
+
+When the skill is used through the agent, **never create a reminder immediately
+from a natural-language request**. Always prepare a draft first and ask the user
+for an explicit approval in a separate turn.
+
+The draft must show every creation-relevant field: title, due date/time or
+anytime, list/section, alarms or early warning, recurrence, estimate, priority,
+tags, notes, URL, attachment, and any action. Ask a direct question such as:
+
+> Draft reminder: **Reply to the contract email** — Monday 09:00, Work, 30m
+> estimate, no early warning. Create it?
+
+Only an unambiguous confirmation (`yes`, `confirm`, `create it`, or equivalent)
+may authorize that exact draft. If the user changes any field, discard the old
+approval and ask again. Silence, ambiguity, or a request to "remind me" alone is
+not approval. Do not create reminders from autonomous actions without a fresh
+user approval either.
+
+This gate covers every agent-mediated creation path, including `rem.py add` and
+`template apply`. A user deliberately running the CLI command themselves is
+already performing the creation operation directly.
+
 ## Commands
 
 ```bash
-# create
+# create after the user explicitly approves the complete draft
 rem.py add "Call Marco" --list Work --due "tomorrow 9:00" --early 30m
 rem.py add "Report" --due 2026-10-01 --repeat monthly:last:fri --repeat-until 2027-12-31
 rem.py add "Standup" --due "monday 9:30" --repeat weekly:mon,wed
@@ -378,12 +401,12 @@ The first day of the week is **not** configurable: it is always Monday.
 
 ## Operating rules
 
-1. **Confirm before creating** when the request is vague ("remind me to call someone"): ask who and when.
+1. **Always ask for explicit approval before creating**: show the complete draft and wait for a separate confirmation. This applies even when the request already includes title and date.
 2. **Ambiguous date → ask.** Never invent a time: a reminder at 09:00 when the user meant 18:00 is worse than no reminder.
 3. **Actionable titles**: "Send the report to Marco", not "report".
 4. **Fetch the ID from a view** before `done`/`edit`/`delete`: never guess it.
 5. **Complete only when it is actually done**, never on intent.
-6. After an `add`, report **what** was created and **when** it will notify.
+6. After approval and `add`, report **what** was created and **when** it will notify.
 7. A completed recurring reminder **is not archived**: it rolls to the next occurrence. To stop it, `edit --repeat none`.
 
 ## Pitfalls
